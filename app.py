@@ -27,7 +27,7 @@ for i in range(12):
 
 selected_month = st.selectbox("조회하고 싶은 달을 선택하세요", month_list)
 
-# 3. 데이터 가져오기 함수 
+# 3. 데이터 가져오기 함수 (전체 데이터를 가져오기 위해 numOfRows 1000으로 확장)
 def get_data():
     try:
         api_key = st.secrets["DATA_GO_KR_API_KEY"]
@@ -39,7 +39,7 @@ def get_data():
     params = {
         "ServiceKey": api_key,
         "type": "json",  
-        "numOfRows": "100",
+        "numOfRows": "1000",  # 식약처 서버의 전체 데이터를 누락 없이 한 번에 가져옵니다.
         "pageNo": "1"
     }
     
@@ -69,26 +69,25 @@ if error_msg:
 elif not items:
     st.info("API 호출은 정상적이나, 식약처 서버에서 넘겨준 데이터가 0건입니다.")
 else:
-    # 선택된 달(예: "2026.06")을 날짜 형식에 맞춰 변환 ("202606")
+    # 선택된 달(예: "2026.05")을 날짜 형식에 맞춰 변환 ("202605")
     selected_year_month = selected_month.replace(".", "")
     filtered_items = []
     
-    # 수정됨: 기준을 처분확정일(DSPS_DCSNDT)이 아닌 식약처 공표일자(PUBLIC_DT)로 변경
+    # 식약처 공표일자(PUBLIC_DT) 기준으로 필터링하여 새롭게 등록된 업체를 분류
     for item in items:
-        # 공표일자가 빈 값일 경우를 대비해 처분일자를 보조로 가져옵니다.
         date_val = str(item.get('PUBLIC_DT', item.get('DSPS_DCSNDT', '')))
         
         if date_val.startswith(selected_year_month):
             filtered_items.append(item)
 
     if not filtered_items:
-        st.info(f"{selected_month}에 해당하는 행정처분 데이터가 없습니다.")
+        st.info(f"식약처 데이터센터 기준 {selected_month}에 공표(등록)된 행정처분 데이터가 존재하지 않습니다.")
     else:
         df = pd.DataFrame(filtered_items)
-        st.subheader(f"📊 {selected_month} 행정처분 공표 리스트")
+        st.subheader(f"📊 {selected_month} 행정처분 신규 공표 리스트")
         
         company_names = list(set([item.get('PRCSCITYPOINT_BSSHNM', '알 수 없음') for item in filtered_items]))
-        selected_company = st.selectbox("상세 정보를 보려면 업체를 선택하세요", ["업체를 선택하세요"] + company_names)
+        selected_company = st.selectbox("자세한 내용을 확인하려면 업체를 선택하세요", ["업체를 선택하세요"] + company_names)
 
         if selected_company != "업체를 선택하세요":
             detail = next((item for item in filtered_items if item.get('PRCSCITYPOINT_BSSHNM') == selected_company), None)
