@@ -5,30 +5,22 @@ from datetime import datetime
 import dateutil.relativedelta
 
 # 1. 기본 페이지 설정
-st.set_page_config(page_title="식약처 행정처분 결과", layout="wide")
+st.set_page_config(page_title="식약처 행정처분 모니터링", layout="wide")
 
 # CSS를 이용해 디자인을 깔끔하게 잡습니다.
 st.markdown("""
     <style>
     .main { background-color: #f8f9fa; }
     .stButton>button { width: 100%; border-radius: 5px; background-color: #007bff; color: white; }
-    .penalty-card { border: 1px solid #ddd; padding: 15px; border-radius: 10px; background-color: white; margin-bottom: 10px; }
+    .penalty-card { border: 1px solid #ddd; padding: 15px; border-radius: 10px; background-color: white; margin-bottom: 10px; border-left: 5px solid #e74c3c; }
     .info-box { background-color: #e9ecef; padding: 15px; border-radius: 8px; margin-bottom: 20px; font-size: 14px; }
+    .dairy-box { background-color: #e3f2fd; padding: 15px; border-radius: 8px; margin-bottom: 20px; font-size: 14px; border: 1px solid #90caf9;}
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🥛 연세유업 식약처 데이터 행정처분 결과")
+st.title("🥛 식약처 행정처분 실시간 모니터링")
 
-# 2. 월 선택 UI 자동 생성 (오늘 날짜 기준 과거 12개월 리스트)
-today = datetime.now()
-month_list = []
-for i in range(12):
-    d = today - dateutil.relativedelta.relativedelta(months=i)
-    month_list.append(d.strftime("%Y.%m"))
-
-selected_month = st.selectbox("조회하고 싶은 달을 선택하세요", month_list)
-
-# 3. 데이터 가져오기 함수 (서버 최대 허용치인 500으로 설정)
+# 2. 데이터 가져오기 함수 (전체 500건 세팅)
 def get_data():
     try:
         api_key = st.secrets["DATA_GO_KR_API_KEY"]
@@ -62,76 +54,124 @@ def get_data():
     except Exception as e:
         return None, f"서버 요청 중 시스템 에러 발생: {e}"
 
-# 4. 화면 출력 및 필터링 로직
-items, error_msg = get_data()
+# 3. 데이터 로드
+with st.spinner("식약처 실시간 데이터를 불러오는 중입니다..."):
+    items, error_msg = get_data()
 
 if error_msg:
     st.error(f"데이터 호출 오류 발생: {error_msg}")
 elif not items:
     st.info("API 호출은 정상적이나, 식약처 서버에서 넘겨준 데이터가 0건입니다.")
 else:
-    # 팩트 체크: 현재 식약처에서 제공 중인 데이터가 어느 달에 분포해 있는지 추출합니다.
-    available_months = set()
-    for item in items:
-        date_val = str(item.get('PUBLIC_DT', item.get('DSPS_DCSNDT', '')))
-        if len(date_val) >= 6:
-            formatted_month = f"{date_val[:4]}.{date_val[4:6]}"
-            available_months.add(formatted_month)
-            
-    sorted_available_months = sorted(list(available_months), reverse=True)
+    # --- 데이터 전처리 ---
+    # 판다스 데이터프레임으로 전체 변환 후 필요한 컬럼만 정리
+    df_all = pd.DataFrame(items)
     
-    # 상단에 데이터 현황을 박스 형태로 알려줍니다.
+    # 보기 편하도록 컬럼명 한글화 (표 출력용)
+    if not df_all.empty:
+        df_display = df_all[['PRCSCITYPOINT_BSSHNM', 'LAWORD_CD_NM', 'VILTCN', 'DSPSCN', 'DSPS_DCSNDT', 'PUBLIC_DT', 'ADDR']].copy()
+        df_display.columns = ['업체명', '위반법령', '위반내용', '행정처분명', '처분확정일', '공표만료일', '소재지']
+    else:
+        df_display = pd.DataFrame()
+
+    # 상단 요약 정보 박스
     st.markdown(f"""
     <div class="info-box">
-        <strong>💡 현재 식약처 서버 실시간 데이터 현황 (총 {len(items)}건)</strong><br>
-        실제 행정처분 공표 데이터가 존재하는 달: {', '.join(sorted_available_months)}<br>
-        <span style="color: #666; font-size: 12px;">※ 법적 공표 기간이 만료된 과거 데이터는 식약처 정책에 따라 서버에서 자동 삭제되어 조회되지 않습니다.</span>
+        <strong>💡 실시간 데이터 수집 현황</strong>: 현재 공표 중인 전체 행정처분 <strong>{len(items)}건</strong> 연동 완료
     </div>
     """, unsafe_allow_html=True)
 
-    # 선택된 달을 날짜 형식에 맞춰 변환 ("202606")
-    selected_year_month = selected_month.replace(".", "")
-    filtered_items = []
-    
-    for item in items:
-        date_val = str(item.get('PUBLIC_DT', item.get('DSPS_DCSNDT', '')))
-        
-        if date_val.startswith(selected_year_month):
-            filtered_items.append(item)
+    # --- UI: 3개의 탭 구성 ---
+    tab1, tab2, tab3 = st.tabs(["🔍 전체 업체 통합 검색", "🥛 유가공·유제품 동향", "📅 월별 신규 등록 내역"])
 
-    if not filtered_items:
-        st.info(f"식약처 데이터센터 기준 {selected_month}에 공표(등록)된 행정처분 데이터가 존재하지 않습니다.")
-    else:
-        df = pd.DataFrame(filtered_items)
-        st.subheader(f"📊 {selected_month} 행정처분 신규 공표 리스트")
+    # ==========================================
+    # 탭 1: 전체 업체 통합 검색
+    # ==========================================
+    with tab1:
+        st.subheader("🔍 특정 업체 행정처분 이력 검색")
+        search_keyword = st.text_input("검색할 업체명을 입력하세요 (예: 삼성, 농업회사법인 등)", key="search_input")
         
-        company_names = list(set([item.get('PRCSCITYPOINT_BSSHNM', '알 수 없음') for item in filtered_items]))
-        selected_company = st.selectbox("자세한 내용을 확인하려면 업체를 선택하세요", ["업체를 선택하세요"] + company_names)
-
-        if selected_company != "업체를 선택하세요":
-            detail = next((item for item in filtered_items if item.get('PRCSCITYPOINT_BSSHNM') == selected_company), None)
+        if search_keyword:
+            # 검색어가 포함된 데이터 필터링
+            search_result = df_display[df_display['업체명'].str.contains(search_keyword, na=False)]
             
-            if detail:
-                st.markdown(f"""
-                <div class="penalty-card">
-                    <h3>🏢 업체명: {detail.get('PRCSCITYPOINT_BSSHNM', '내용 없음')}</h3>
-                    <p><strong>⚠️ 위반법령:</strong> {detail.get('LAWORD_CD_NM', '내용 없음')}</p>
-                    <p><strong>📝 위반내용:</strong> {detail.get('VILTCN', '내용 없음')}</p>
-                    <p><strong>⚖️ 행정처분명:</strong> {detail.get('DSPSCN', '내용 없음')}</p>
-                    <p><strong>📅 처분시작일:</strong> {detail.get('DSPS_BGNDT', '내용 없음')}</p>
-                    <p><strong>📢 공표일자:</strong> {detail.get('PUBLIC_DT', '내용 없음')}</p>
-                    <p><strong>📍 소재지:</strong> {detail.get('ADDR', '내용 없음')}</p>
-                </div>
-                """, unsafe_allow_html=True)
+            if search_result.empty:
+                st.success(f"'{search_keyword}'(으)로 검색된 행정처분 내역이 없습니다. (클린 사업장)")
+            else:
+                st.warning(f"총 {len(search_result)}건의 행정처분 내역이 발견되었습니다.")
+                st.dataframe(search_result, use_container_width=True)
+
+    # ==========================================
+    # 탭 2: 유가공·유제품 동향 필터링
+    # ==========================================
+    with tab2:
+        st.subheader("🥛 동종업계(유제품/유가공) 행정처분 모아보기")
         
-        with st.expander("전체 데이터 표 보기"):
-            display_df = df[['PRCSCITYPOINT_BSSHNM', 'LAWORD_CD_NM', 'DSPSCN', 'PUBLIC_DT', 'DSPS_BGNDT']].rename(
-                columns={
-                    'PRCSCITYPOINT_BSSHNM': '업체명',
-                    'LAWORD_CD_NM': '위반법령',
-                    'DSPSCN': '행정처분명',
-                    'PUBLIC_DT': '공표일자',
-                    'DSPS_BGNDT': '처분시작일'
-                }
-            )
-            st.dataframe(display_df)
+        # 유제품 관련 키워드 리스트 (필요시 '치즈', '요구르트' 등 단어 추가 가능)
+        dairy_keywords = ['유업', '우유', '치즈', '요거트', '목장', '유가공', '밀크', '다논', '푸르밀', '매일', '남양', '서울우유', '빙그레', '연세', '파스퇴르']
+        
+        st.markdown(f"""
+        <div class="dairy-box">
+            ✔️ <strong>적용된 필터링 키워드:</strong> {', '.join(dairy_keywords)}<br>
+            위 단어가 이름에 포함된 업체의 위반 사례만 자동으로 모아서 보여줍니다. 타사의 위반 사유(VILTCN)를 분석하여 자사 품질 관리에 참고하십시오.
+        </div>
+        """, unsafe_allow_html=True)
+
+        # 키워드 중 하나라도 포함된 업체 찾기
+        dairy_pattern = '|'.join(dairy_keywords)
+        dairy_result = df_display[df_display['업체명'].str.contains(dairy_pattern, na=False, regex=True)]
+
+        if dairy_result.empty:
+            st.info("현재 공표된 행정처분 내역 중 유가공/유제품 관련 업체의 적발 건은 없습니다.")
+        else:
+            st.error(f"동종업계 행정처분 총 {len(dairy_result)}건이 조회되었습니다.")
+            st.dataframe(dairy_result, use_container_width=True)
+
+    # ==========================================
+    # 탭 3: 기존의 월별 조회 시스템
+    # ==========================================
+    with tab3:
+        st.subheader("📅 월별 신규 행정처분 리스트")
+        
+        available_months = set()
+        for item in items:
+            date_val = str(item.get('DSPS_DCSNDT', ''))
+            if len(date_val) >= 6:
+                formatted_month = f"{date_val[:4]}.{date_val[4:6]}"
+                available_months.add(formatted_month)
+                
+        month_list = sorted(list(available_months), reverse=True)
+        
+        if month_list:
+            selected_month = st.selectbox("조회할 처분 확정 월을 선택하세요", month_list)
+            selected_year_month = selected_month.replace(".", "")
+            
+            filtered_items = [item for item in items if str(item.get('DSPS_DCSNDT', '')).startswith(selected_year_month)]
+            
+            if filtered_items:
+                company_names = list(set([item.get('PRCSCITYPOINT_BSSHNM', '알 수 없음') for item in filtered_items]))
+                selected_company = st.selectbox("상세 내용을 확인할 업체를 선택하세요", ["업체를 선택하세요"] + company_names)
+
+                if selected_company != "업체를 선택하세요":
+                    detail = next((item for item in filtered_items if item.get('PRCSCITYPOINT_BSSHNM') == selected_company), None)
+                    
+                    if detail:
+                        st.markdown(f"""
+                        <div class="penalty-card">
+                            <h3>🏢 업체명: {detail.get('PRCSCITYPOINT_BSSHNM', '내용 없음')}</h3>
+                            <p><strong>⚠️ 위반법령:</strong> {detail.get('LAWORD_CD_NM', '내용 없음')}</p>
+                            <p><strong>📝 위반내용:</strong> {detail.get('VILTCN', '내용 없음')}</p>
+                            <p><strong>⚖️ 행정처분명:</strong> {detail.get('DSPSCN', '내용 없음')}</p>
+                            <p><strong>📅 처분확정일:</strong> {detail.get('DSPS_DCSNDT', '내용 없음')}</p>
+                            <p><strong>📍 소재지:</strong> {detail.get('ADDR', '내용 없음')}</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                
+                # 월별 전체 데이터 표
+                month_df = pd.DataFrame(filtered_items)
+                month_display = month_df[['PRCSCITYPOINT_BSSHNM', 'LAWORD_CD_NM', 'DSPSCN', 'DSPS_DCSNDT']].rename(
+                    columns={'PRCSCITYPOINT_BSSHNM': '업체명', 'LAWORD_CD_NM': '위반법령', 'DSPSCN': '행정처분명', 'DSPS_DCSNDT': '처분확정일'}
+                )
+                st.dataframe(month_display, use_container_width=True)
+        else:
+            st.info("표시할 수 있는 월별 데이터가 없습니다.")
