@@ -11,16 +11,16 @@ st.set_page_config(page_title="식약처 행정처분 모니터링", layout="wid
 st.markdown("""
     <style>
     .main { background-color: #f8f9fa; }
-    .stButton>button { width: 100%; border-radius: 5px; background-color: #007bff; color: white; }
-    .penalty-card { border: 1px solid #ddd; padding: 15px; border-radius: 10px; background-color: white; margin-bottom: 10px; border-left: 5px solid #e74c3c; }
+    .penalty-card { border: 1px solid #ddd; padding: 15px; border-radius: 10px; background-color: white; margin-top: 20px; margin-bottom: 20px; border-left: 5px solid #e74c3c; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
     .info-box { background-color: #e9ecef; padding: 15px; border-radius: 8px; margin-bottom: 20px; font-size: 14px; }
     .dairy-box { background-color: #e3f2fd; padding: 15px; border-radius: 8px; margin-bottom: 20px; font-size: 14px; border: 1px solid #90caf9;}
+    .guide-text { color: #2980b9; font-weight: bold; margin-bottom: 10px; }
     </style>
     """, unsafe_allow_html=True)
 
 st.title("🥛 식약처 행정처분 실시간 모니터링")
 
-# 2. 데이터 가져오기 함수 (전체 500건 세팅)
+# 2. 데이터 가져오기 함수 
 def get_data():
     try:
         api_key = st.secrets["DATA_GO_KR_API_KEY"]
@@ -63,25 +63,16 @@ if error_msg:
 elif not items:
     st.info("API 호출은 정상적이나, 식약처 서버에서 넘겨준 데이터가 0건입니다.")
 else:
-    # --- 데이터 전처리 ---
-    # 판다스 데이터프레임으로 전체 변환 후 필요한 컬럼만 정리
+    # 전체 데이터를 판다스 데이터프레임으로 변환
     df_all = pd.DataFrame(items)
-    
-    # 보기 편하도록 컬럼명 한글화 (표 출력용)
-    if not df_all.empty:
-        df_display = df_all[['PRCSCITYPOINT_BSSHNM', 'LAWORD_CD_NM', 'VILTCN', 'DSPSCN', 'DSPS_DCSNDT', 'PUBLIC_DT', 'ADDR']].copy()
-        df_display.columns = ['업체명', '위반법령', '위반내용', '행정처분명', '처분확정일', '공표만료일', '소재지']
-    else:
-        df_display = pd.DataFrame()
 
-    # 상단 요약 정보 박스
     st.markdown(f"""
     <div class="info-box">
         <strong>💡 실시간 데이터 수집 현황</strong>: 현재 공표 중인 전체 행정처분 <strong>{len(items)}건</strong> 연동 완료
     </div>
     """, unsafe_allow_html=True)
 
-    # --- UI: 3개의 탭 구성 ---
+    # UI: 3개의 탭 구성
     tab1, tab2, tab3 = st.tabs(["🔍 전체 업체 통합 검색", "🥛 유가공·유제품 동향", "📅 월별 신규 등록 내역"])
 
     # ==========================================
@@ -92,14 +83,42 @@ else:
         search_keyword = st.text_input("검색할 업체명을 입력하세요 (예: 삼성, 농업회사법인 등)", key="search_input")
         
         if search_keyword:
-            # 검색어가 포함된 데이터 필터링
-            search_result = df_display[df_display['업체명'].str.contains(search_keyword, na=False)]
+            # 검색어가 포함된 데이터를 찾고, 클릭 시 매칭을 위해 인덱스를 초기화합니다.
+            search_df = df_all[df_all['PRCSCITYPOINT_BSSHNM'].str.contains(search_keyword, na=False)].reset_index(drop=True)
             
-            if search_result.empty:
+            if search_df.empty:
                 st.success(f"'{search_keyword}'(으)로 검색된 행정처분 내역이 없습니다. (클린 사업장)")
             else:
-                st.warning(f"총 {len(search_result)}건의 행정처분 내역이 발견되었습니다.")
-                st.dataframe(search_result, use_container_width=True)
+                st.warning(f"총 {len(search_df)}건의 행정처분 내역이 발견되었습니다.")
+                
+                search_display = search_df[['PRCSCITYPOINT_BSSHNM', 'LAWORD_CD_NM', 'DSPSCN', 'DSPS_DCSNDT', 'PUBLIC_DT']].copy()
+                search_display.columns = ['업체명', '위반법령', '행정처분명', '처분확정일', '공표만료일']
+                
+                st.markdown('<p class="guide-text">👇 표에서 원하는 업체를 클릭하면 상세 정보가 나타납니다.</p>', unsafe_allow_html=True)
+                
+                # 표를 클릭 가능하도록 on_select 옵션을 적용합니다.
+                event_search = st.dataframe(
+                    search_display, 
+                    use_container_width=True, 
+                    on_select="rerun", 
+                    selection_mode="single-row"
+                )
+                
+                # 표에서 특정 행이 클릭되었을 때의 처리
+                if len(event_search.selection.rows) > 0:
+                    selected_idx = event_search.selection.rows[0]
+                    detail = search_df.iloc[selected_idx]
+                    
+                    st.markdown(f"""
+                    <div class="penalty-card">
+                        <h3>🏢 {detail.get('PRCSCITYPOINT_BSSHNM', '내용 없음')}</h3>
+                        <p><strong>⚠️ 위반법령:</strong> {detail.get('LAWORD_CD_NM', '내용 없음')}</p>
+                        <p><strong>📝 위반내용:</strong> {detail.get('VILTCN', '내용 없음')}</p>
+                        <p><strong>⚖️ 행정처분명:</strong> {detail.get('DSPSCN', '내용 없음')}</p>
+                        <p><strong>📅 처분확정일:</strong> {detail.get('DSPS_DCSNDT', '내용 없음')} &nbsp;&nbsp;|&nbsp;&nbsp; <strong>📅 처분시작일:</strong> {detail.get('DSPS_BGNDT', '내용 없음')}</p>
+                        <p><strong>📍 소재지:</strong> {detail.get('ADDR', '내용 없음')}</p>
+                    </div>
+                    """, unsafe_allow_html=True)
 
     # ==========================================
     # 탭 2: 유가공·유제품 동향 필터링
@@ -107,7 +126,6 @@ else:
     with tab2:
         st.subheader("🥛 동종업계(유제품/유가공) 행정처분 모아보기")
         
-        # 유제품 관련 키워드 리스트 (필요시 '치즈', '요구르트' 등 단어 추가 가능)
         dairy_keywords = ['유업', '우유', '치즈', '요거트', '목장', '유가공', '밀크', '다논', '푸르밀', '매일', '남양', '서울우유', '빙그레', '연세', '파스퇴르']
         
         st.markdown(f"""
@@ -117,21 +135,46 @@ else:
         </div>
         """, unsafe_allow_html=True)
 
-        # 키워드 중 하나라도 포함된 업체 찾기
         dairy_pattern = '|'.join(dairy_keywords)
-        dairy_result = df_display[df_display['업체명'].str.contains(dairy_pattern, na=False, regex=True)]
+        dairy_df = df_all[df_all['PRCSCITYPOINT_BSSHNM'].str.contains(dairy_pattern, na=False, regex=True)].reset_index(drop=True)
 
-        if dairy_result.empty:
+        if dairy_df.empty:
             st.info("현재 공표된 행정처분 내역 중 유가공/유제품 관련 업체의 적발 건은 없습니다.")
         else:
-            st.error(f"동종업계 행정처분 총 {len(dairy_result)}건이 조회되었습니다.")
-            st.dataframe(dairy_result, use_container_width=True)
+            st.error(f"동종업계 행정처분 총 {len(dairy_df)}건이 조회되었습니다.")
+            
+            dairy_display = dairy_df[['PRCSCITYPOINT_BSSHNM', 'LAWORD_CD_NM', 'DSPSCN', 'DSPS_DCSNDT']].copy()
+            dairy_display.columns = ['업체명', '위반법령', '행정처분명', '처분확정일']
+            
+            st.markdown('<p class="guide-text">👇 표에서 원하는 업체를 클릭하면 상세 정보가 나타납니다.</p>', unsafe_allow_html=True)
+            
+            event_dairy = st.dataframe(
+                dairy_display, 
+                use_container_width=True, 
+                on_select="rerun", 
+                selection_mode="single-row"
+            )
+            
+            if len(event_dairy.selection.rows) > 0:
+                selected_idx = event_dairy.selection.rows[0]
+                detail = dairy_df.iloc[selected_idx]
+                
+                st.markdown(f"""
+                <div class="penalty-card">
+                    <h3>🏢 {detail.get('PRCSCITYPOINT_BSSHNM', '내용 없음')}</h3>
+                    <p><strong>⚠️ 위반법령:</strong> {detail.get('LAWORD_CD_NM', '내용 없음')}</p>
+                    <p><strong>📝 위반내용:</strong> {detail.get('VILTCN', '내용 없음')}</p>
+                    <p><strong>⚖️ 행정처분명:</strong> {detail.get('DSPSCN', '내용 없음')}</p>
+                    <p><strong>📅 처분확정일:</strong> {detail.get('DSPS_DCSNDT', '내용 없음')} &nbsp;&nbsp;|&nbsp;&nbsp; <strong>📅 처분시작일:</strong> {detail.get('DSPS_BGNDT', '내용 없음')}</p>
+                    <p><strong>📍 소재지:</strong> {detail.get('ADDR', '내용 없음')}</p>
+                </div>
+                """, unsafe_allow_html=True)
 
     # ==========================================
-    # 탭 3: 기존의 월별 조회 시스템
+    # 탭 3: 월별 신규 등록 내역
     # ==========================================
     with tab3:
-        st.subheader("📅 월별 신규 행정처분 리스트")
+        st.subheader("📅 월별 행정처분 등록 리스트")
         
         available_months = set()
         for item in items:
@@ -146,32 +189,36 @@ else:
             selected_month = st.selectbox("조회할 처분 확정 월을 선택하세요", month_list)
             selected_year_month = selected_month.replace(".", "")
             
-            filtered_items = [item for item in items if str(item.get('DSPS_DCSNDT', '')).startswith(selected_year_month)]
+            # 선택된 달의 데이터만 필터링 후 인덱스 재정렬
+            month_items = [item for item in items if str(item.get('DSPS_DCSNDT', '')).startswith(selected_year_month)]
+            month_df = pd.DataFrame(month_items).reset_index(drop=True)
             
-            if filtered_items:
-                company_names = list(set([item.get('PRCSCITYPOINT_BSSHNM', '알 수 없음') for item in filtered_items]))
-                selected_company = st.selectbox("상세 내용을 확인할 업체를 선택하세요", ["업체를 선택하세요"] + company_names)
-
-                if selected_company != "업체를 선택하세요":
-                    detail = next((item for item in filtered_items if item.get('PRCSCITYPOINT_BSSHNM') == selected_company), None)
-                    
-                    if detail:
-                        st.markdown(f"""
-                        <div class="penalty-card">
-                            <h3>🏢 업체명: {detail.get('PRCSCITYPOINT_BSSHNM', '내용 없음')}</h3>
-                            <p><strong>⚠️ 위반법령:</strong> {detail.get('LAWORD_CD_NM', '내용 없음')}</p>
-                            <p><strong>📝 위반내용:</strong> {detail.get('VILTCN', '내용 없음')}</p>
-                            <p><strong>⚖️ 행정처분명:</strong> {detail.get('DSPSCN', '내용 없음')}</p>
-                            <p><strong>📅 처분확정일:</strong> {detail.get('DSPS_DCSNDT', '내용 없음')}</p>
-                            <p><strong>📍 소재지:</strong> {detail.get('ADDR', '내용 없음')}</p>
-                        </div>
-                        """, unsafe_allow_html=True)
+            if not month_df.empty:
+                month_display = month_df[['PRCSCITYPOINT_BSSHNM', 'LAWORD_CD_NM', 'DSPSCN', 'DSPS_DCSNDT']].copy()
+                month_display.columns = ['업체명', '위반법령', '행정처분명', '처분확정일']
                 
-                # 월별 전체 데이터 표
-                month_df = pd.DataFrame(filtered_items)
-                month_display = month_df[['PRCSCITYPOINT_BSSHNM', 'LAWORD_CD_NM', 'DSPSCN', 'DSPS_DCSNDT']].rename(
-                    columns={'PRCSCITYPOINT_BSSHNM': '업체명', 'LAWORD_CD_NM': '위반법령', 'DSPSCN': '행정처분명', 'DSPS_DCSNDT': '처분확정일'}
+                st.markdown('<p class="guide-text">👇 표에서 원하는 업체를 클릭하면 상세 정보가 나타납니다.</p>', unsafe_allow_html=True)
+                
+                event_month = st.dataframe(
+                    month_display, 
+                    use_container_width=True, 
+                    on_select="rerun", 
+                    selection_mode="single-row"
                 )
-                st.dataframe(month_display, use_container_width=True)
+                
+                if len(event_month.selection.rows) > 0:
+                    selected_idx = event_month.selection.rows[0]
+                    detail = month_df.iloc[selected_idx]
+                    
+                    st.markdown(f"""
+                    <div class="penalty-card">
+                        <h3>🏢 {detail.get('PRCSCITYPOINT_BSSHNM', '내용 없음')}</h3>
+                        <p><strong>⚠️ 위반법령:</strong> {detail.get('LAWORD_CD_NM', '내용 없음')}</p>
+                        <p><strong>📝 위반내용:</strong> {detail.get('VILTCN', '내용 없음')}</p>
+                        <p><strong>⚖️ 행정처분명:</strong> {detail.get('DSPSCN', '내용 없음')}</p>
+                        <p><strong>📅 처분확정일:</strong> {detail.get('DSPS_DCSNDT', '내용 없음')} &nbsp;&nbsp;|&nbsp;&nbsp; <strong>📅 처분시작일:</strong> {detail.get('DSPS_BGNDT', '내용 없음')}</p>
+                        <p><strong>📍 소재지:</strong> {detail.get('ADDR', '내용 없음')}</p>
+                    </div>
+                    """, unsafe_allow_html=True)
         else:
             st.info("표시할 수 있는 월별 데이터가 없습니다.")
