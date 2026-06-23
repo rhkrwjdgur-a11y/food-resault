@@ -27,14 +27,14 @@ for i in range(12):
 
 selected_month = st.selectbox("조회하고 싶은 달을 선택하세요", month_list)
 
-# 3. 데이터 가져오기 함수 (식품제조가공업 전용 API로 수정)
+# 3. 데이터 가져오기 함수 (실제 넘어오는 JSON 구조에 맞게 수정)
 def get_data():
     try:
         api_key = st.secrets["DATA_GO_KR_API_KEY"]
     except KeyError:
         return None, "Streamlit Settings의 Secrets에 'DATA_GO_KR_API_KEY'가 입력되지 않았습니다."
     
-    # 사진에 올려주신 End Point + 세부 호출 오퍼레이션 명칭 결합
+    # 식약처 식품제조가공업 API 주소
     url = "https://apis.data.go.kr/1471000/AdmmRsltFoodMnftPrcsService/getAdmmRsltFoodMnftPrcsBssh"
     
     params = {
@@ -45,15 +45,14 @@ def get_data():
     }
     
     try:
-        # 인증키 보안 이슈를 방지하기 위해 verify=False 옵션을 넣거나 http를 사용하기도 하지만, 
-        # 공공데이터포털 권장에 따라 기본 https 요청을 진행합니다.
         response = requests.get(url, params=params)
         
         if response.status_code == 200:
             try:
                 data = response.json()
-                if 'response' in data and 'body' in data['response']:
-                    items = data['response']['body'].get('items', [])
+                # 수정됨: 넘어온 실제 데이터 구조('response' 없이 바로 'body' 안에 'items'가 있음) 반영
+                if 'body' in data and 'items' in data['body']:
+                    items = data['body'].get('items', [])
                     return items, None
                 else:
                     return None, f"API 응답 데이터 형식이 맞지 않습니다. 원본 데이터: {data}"
@@ -76,12 +75,11 @@ else:
     selected_year_month = selected_month.replace(".", "")
     filtered_items = []
     
-    # 식품제조가공업 API의 처분일자 컬럼명은 주로 'ADMDSP_DT'를 사용합니다.
+    # 수정됨: 실제 처분일자 컬럼명 (DSPS_DCSNDT 또는 DSPS_BGNDT) 반영
     for item in items:
-        # 혹시 모를 다른 날짜 컬럼명에 대비한 다중 체크
-        date_val = str(item.get('ADMDSP_DT', item.get('DISPOS_DATE', item.get('EXAATHR_PD', ''))))
+        date_val = str(item.get('DSPS_DCSNDT', item.get('DSPS_BGNDT', '')))
         
-        # '20260615' 처럼 날짜가 연월로 시작하는지 체크
+        # '20240618' 처럼 날짜가 연월로 시작하는지 체크
         if date_val.startswith(selected_year_month):
             filtered_items.append(item)
 
@@ -91,23 +89,34 @@ else:
         df = pd.DataFrame(filtered_items)
         st.subheader(f"📊 {selected_month} 행정처분 업체 리스트")
         
-        # 업소명 추출 (BSSH_NM 컬럼)
-        company_names = list(set([item.get('BSSH_NM', item.get('ENTP_NAME', '알 수 없음')) for item in filtered_items]))
+        # 수정됨: 실제 업소명 컬럼(PRCSCITYPOINT_BSSHNM) 반영
+        company_names = list(set([item.get('PRCSCITYPOINT_BSSHNM', '알 수 없음') for item in filtered_items]))
         selected_company = st.selectbox("상세 정보를 보려면 업체를 선택하세요", ["업체를 선택하세요"] + company_names)
 
         if selected_company != "업체를 선택하세요":
-            detail = next((item for item in filtered_items if item.get('BSSH_NM', item.get('ENTP_NAME')) == selected_company), None)
+            detail = next((item for item in filtered_items if item.get('PRCSCITYPOINT_BSSHNM') == selected_company), None)
             
             if detail:
+                # 수정됨: 위반내용(VILTCN), 처분명(DSPSCN), 관련법(LAWORD_CD_NM), 주소(ADDR) 등 실제 컬럼 반영
                 st.markdown(f"""
                 <div class="penalty-card">
-                    <h3>🏢 업체명: {detail.get('BSSH_NM', detail.get('ENTP_NAME', '내용 없음'))}</h3>
-                    <p><strong>⚠️ 위반법령:</strong> {detail.get('LGL_CD_NM', detail.get('VIOLT_NM', '내용 없음'))}</p>
-                    <p><strong>📝 위반내용:</strong> {detail.get('VIOLT_CN', '내용 없음')}</p>
-                    <p><strong>⚖️ 행정처분명:</strong> {detail.get('ADMDSP_NM', detail.get('EXAATHR_NM', '내용 없음'))}</p>
-                    <p><strong>📅 처분일자:</strong> {detail.get('ADMDSP_DT', detail.get('EXAATHR_PD', '내용 없음'))}</p>
+                    <h3>🏢 업체명: {detail.get('PRCSCITYPOINT_BSSHNM', '내용 없음')}</h3>
+                    <p><strong>⚠️ 위반법령:</strong> {detail.get('LAWORD_CD_NM', '내용 없음')}</p>
+                    <p><strong>📝 위반내용:</strong> {detail.get('VILTCN', '내용 없음')}</p>
+                    <p><strong>⚖️ 행정처분명:</strong> {detail.get('DSPSCN', '내용 없음')}</p>
+                    <p><strong>📅 처분시작일:</strong> {detail.get('DSPS_BGNDT', '내용 없음')}</p>
+                    <p><strong>📍 소재지:</strong> {detail.get('ADDR', '내용 없음')}</p>
                 </div>
                 """, unsafe_allow_html=True)
         
         with st.expander("전체 데이터 표 보기"):
-            st.dataframe(df)
+            # 전체 표를 볼 때 보기 편하도록 한글 컬럼명으로 변경하여 출력
+            display_df = df[['PRCSCITYPOINT_BSSHNM', 'LAWORD_CD_NM', 'DSPSCN', 'DSPS_BGNDT']].rename(
+                columns={
+                    'PRCSCITYPOINT_BSSHNM': '업체명',
+                    'LAWORD_CD_NM': '위반법령',
+                    'DSPSCN': '행정처분명',
+                    'DSPS_BGNDT': '처분시작일'
+                }
+            )
+            st.dataframe(display_df)
