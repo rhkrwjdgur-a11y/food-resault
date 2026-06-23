@@ -27,7 +27,7 @@ for i in range(12):
 
 selected_month = st.selectbox("조회하고 싶은 달을 선택하세요", month_list)
 
-# 3. 데이터 가져오기 함수 (전체 데이터를 가져오기 위해 numOfRows 1000으로 확장)
+# 3. 데이터 가져오기 함수 (서버 최대 허용치인 500으로 수정)
 def get_data():
     try:
         api_key = st.secrets["DATA_GO_KR_API_KEY"]
@@ -39,7 +39,7 @@ def get_data():
     params = {
         "ServiceKey": api_key,
         "type": "json",  
-        "numOfRows": "1000",  # 식약처 서버의 전체 데이터를 누락 없이 한 번에 가져옵니다.
+        "numOfRows": "500",  # 식약처 API 서버의 최대 허용 한도인 500으로 설정
         "pageNo": "1"
     }
     
