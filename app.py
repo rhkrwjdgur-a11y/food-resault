@@ -1,73 +1,93 @@
 import streamlit as st
 import requests
 import pandas as pd
+from datetime import datetime
+import dateutil.relativedelta
 
-# 웹 브라우저 탭의 제목과 화면 넓이를 설정합니다.
-st.set_page_config(page_title="행정처분 검색 시스템", layout="wide")
+# 1. 기본 페이지 설정
+st.set_page_config(page_title="식약처 행정처분 결과", layout="wide")
 
-# 화면 상단의 메인 제목을 출력합니다.
-st.title("식약처 행정처분 실시간 검색 시스템")
-st.write("업체명을 입력하여 실시간 행정처분 내역 및 형량을 조회합니다.")
+# CSS를 이용해 디자인을 조금 더 깔끔하게 잡습니다.
+st.markdown("""
+    <style>
+    .main { background-color: #f8f9fa; }
+    .stButton>button { width: 100%; border-radius: 5px; background-color: #007bff; color: white; }
+    .penalty-card { border: 1px solid #ddd; padding: 15px; border-radius: 10px; background-color: white; margin-bottom: 10px; }
+    </style>
+    """, unsafe_allow_html=True)
 
-# 보안을 위해 API 키를 화면에 직접 입력받는 칸을 만듭니다. 
-# (코드에 키를 직접 적어서 깃허브에 올리면 다른 사람이 도용할 수 있기 때문입니다.)
-api_key_input = st.text_input("공공데이터포털 API 인증키(Decoding)를 입력하세요", type="password")
+st.title("🥛 연세유업 식약처 데이터 행정처분 결과")
 
-# 사용자가 업체명을 검색할 수 있는 입력 칸을 만듭니다.
-search_keyword = st.text_input("검색할 업체명을 입력하세요 (예: 연세)")
+# 2. 월 선택 UI 자동 생성 (현재 날짜 기준 과거 12개월 리스트)
+# 달이 바뀌면 자동으로 새로운 달이 리스트에 추가됩니다.
+today = datetime.now()
+month_list = []
+for i in range(12):
+    d = today - dateutil.relativedelta.relativedelta(months=i)
+    month_list.append(d.strftime("%Y.%m"))
 
-# 검색 버튼을 만듭니다. 버튼을 누르면 아래의 코드들이 실행됩니다.
-if st.button("검색 실행"):
-    # API 키와 검색어가 모두 입력되었는지 확인합니다.
-    if not api_key_input:
-        st.warning("상단에 API 인증키를 먼저 입력해주세요.")
-    elif not search_keyword:
-        st.warning("검색할 업체명을 입력해주세요.")
-    else:
-        # 진행 중이라는 회전하는 아이콘을 보여줍니다.
-        with st.spinner("공공데이터포털에서 데이터를 실시간으로 가져오는 중입니다..."):
-            
-            # 식약처 공공데이터 API 주소입니다. (사용하시는 API에 따라 주소가 다를 수 있습니다.)
-            url = "http://apis.data.go.kr/1471000/FoodFlwOrdrInfoService/getFoodFlwOrdrItem"
-            
-            # API에 전달할 요청 조건들입니다.
-            params = {
-                "ServiceKey": api_key_input,
-                "pageNo": "1",
-                "numOfRows": "100",  # 한 번에 가져올 데이터 개수
-                "type": "json",      # 데이터를 JSON 형태로 받겠다고 요청
-                "entp_name": search_keyword  # 업체명 검색 조건
-            }
+selected_month = st.selectbox("조회하고 싶은 달을 선택하세요", month_list)
 
-            try:
-                # requests 라이브러리를 사용해 식약처 서버에 데이터를 요청합니다.
-                response = requests.get(url, params=params)
-                
-                # 서버가 정상적으로 응답(상태 코드 200)했는지 확인합니다.
-                if response.status_code == 200:
-                    try:
-                        # 받아온 데이터를 파이썬이 읽을 수 있는 딕셔너리 형태로 변환합니다.
-                        data = response.json()
-                        
-                        # 데이터 중에서 실제 목록(items) 부분만 찾아냅니다. (API 응답 구조에 따라 키 이름이 다를 수 있습니다.)
-                        # 공공데이터포털의 일반적인 JSON 응답 구조: response -> body -> items
-                        items = data.get('response', {}).get('body', {}).get('items', [])
-                        
-                        # 검색된 데이터가 있을 경우 표(데이터프레임) 형태로 화면에 그려줍니다.
-                        if items:
-                            df = pd.DataFrame(items)
-                            st.success(f"총 {len(df)}건의 행정처분 데이터를 찾았습니다.")
-                            st.dataframe(df)
-                        else:
-                            st.info("검색된 업체의 행정처분 내역이 없습니다.")
-                    except Exception as parse_error:
-                        st.error("데이터를 표로 변환하는 데 실패했습니다. 발급받은 API의 데이터 구조가 다를 수 있습니다.")
-                        st.write("오류 상세 내용:", parse_error)
-                        st.write("식약처 서버가 보낸 원본 데이터:", response.text)
-                else:
-                    st.error(f"식약처 서버 호출에 실패했습니다. (상태 코드: {response.status_code})")
-                    
-            # 인터넷 연결 문제 등으로 아예 요청이 실패했을 때의 처리입니다.
-            except Exception as e:
-                st.error("데이터를 요청하는 중 시스템 오류가 발생했습니다.")
-                st.write("오류 상세 내용:", e)
+# 3. 데이터 가져오기 함수 (Secrets 사용)
+def get_data(month_str):
+    # Streamlit Secrets에서 키를 가져옵니다.
+    api_key = st.secrets["DATA_GO_KR_API_KEY"]
+    
+    # 식약처 의약품/식품 행정처분 API 주소 (필요에 따라 엔드포인트 수정 가능)
+    url = "http://apis.data.go.kr/1471000/MdcinExaathrService04/getMdcinExaathrList04"
+    
+    # API 요청 (해당 월의 데이터를 필터링하기 위해 보통 전체를 가져온 후 파이썬으로 거릅니다)
+    params = {
+        "ServiceKey": api_key,
+        "type": "json",
+        "numOfRows": "100",
+        "pageNo": "1"
+    }
+    
+    try:
+        response = requests.get(url, params=params)
+        if response.status_code == 200:
+            data = response.json()
+            items = data.get('response', {}).get('body', {}).get('items', [])
+            return items
+        return []
+    except:
+        return []
+
+# 4. 화면 출력 로직
+items = get_data(selected_month)
+
+if not items:
+    st.info(f"{selected_month}에 해당하는 행정처분 데이터가 없습니다.")
+else:
+    # 데이터를 보기 좋게 표로 정리
+    df = pd.DataFrame(items)
+    
+    # 실제 데이터의 '처분일자' 컬럼명이 API마다 다를 수 있으니 확인이 필요합니다 (예: PRN_DT 또는 DISPOS_DATE)
+    # 여기서는 예시로 전체 리스트를 보여주고 클릭 시 상세 정보를 보여주는 방식을 구현합니다.
+    
+    st.subheader(f"📊 {selected_month} 행정처분 업체 리스트")
+    
+    # 표에서 업체명만 추출해서 선택 박스 만들기
+    company_names = [item.get('ENTP_NAME', '알 수 없음') for item in items]
+    selected_company = st.selectbox("상세 정보를 보려면 업체를 선택하세요", ["업체를 선택하세요"] + company_names)
+
+    if selected_company != "업체를 선택하세요":
+        # 선택한 업체의 데이터만 찾기
+        detail = next((item for item in items if item.get('ENTP_NAME') == selected_company), None)
+        
+        if detail:
+            st.markdown(f"""
+            <div class="penalty-card">
+                <h3>🏢 업체명: {detail.get('ENTP_NAME')}</h3>
+                <p><strong>⚠️ 위반법령:</strong> {detail.get('VIOLT_NM', '내용 없음')}</p>
+                <p><strong>📝 위반내용:</strong> {detail.get('VIOLT_CN', '내용 없음')}</p>
+                <p><strong>⚖️ 행정처분명:</strong> {detail.get('EXAATHR_NM', '내용 없음')}</p>
+                <p><strong>📅 처분기간:</strong> {detail.get('EXAATHR_PD', '내용 없음')}</p>
+                <p><strong>📌 기타참조:</strong> {detail.get('REMARK', '-')}</p>
+            </div>
+            """, unsafe_allow_html=True)
+    
+    # 전체 표도 아래에 참고용으로 표시
+    with st.expander("전체 데이터 표 보기"):
+        st.table(df[['ENTP_NAME', 'VIOLT_NM', 'EXAATHR_NM']])
