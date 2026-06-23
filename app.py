@@ -7,7 +7,7 @@ import dateutil.relativedelta
 # 1. 기본 페이지 설정
 st.set_page_config(page_title="식약처 행정처분 결과", layout="wide")
 
-# CSS를 이용해 디자인을 조금 더 깔끔하게 잡습니다.
+# CSS를 이용해 디자인을 깔끔하게 잡습니다.
 st.markdown("""
     <style>
     .main { background-color: #f8f9fa; }
@@ -18,8 +18,7 @@ st.markdown("""
 
 st.title("🥛 연세유업 식약처 데이터 행정처분 결과")
 
-# 2. 월 선택 UI 자동 생성 (현재 날짜 기준 과거 12개월 리스트)
-# 달이 바뀌면 자동으로 새로운 달이 리스트에 추가됩니다.
+# 2. 월 선택 UI 자동 생성 (오늘 날짜 기준 과거 12개월 리스트)
 today = datetime.now()
 month_list = []
 for i in range(12):
@@ -28,15 +27,17 @@ for i in range(12):
 
 selected_month = st.selectbox("조회하고 싶은 달을 선택하세요", month_list)
 
-# 3. 데이터 가져오기 함수 (Secrets 사용)
-def get_data(month_str):
-    # Streamlit Secrets에서 키를 가져옵니다.
-    api_key = st.secrets["DATA_GO_KR_API_KEY"]
+# 3. 데이터 가져오기 함수 및 팩트 체크 에러 검출 로직
+def get_data():
+    try:
+        # Streamlit Secrets에서 키를 가져옵니다.
+        api_key = st.secrets["DATA_GO_KR_API_KEY"]
+    except KeyError:
+        return None, "Streamlit Settings의 Secrets에 'DATA_GO_KR_API_KEY'가 입력되지 않았습니다."
     
-    # 식약처 의약품/식품 행정처분 API 주소 (필요에 따라 엔드포인트 수정 가능)
-    url = "http://apis.data.go.kr/1471000/MdcinExaathrService04/getMdcinExaathrList04"
+    # 식약처 식품위생법 위반업체 행정처분 API 주소
+    url = "http://apis.data.go.kr/1471000/FoodFlwOrdrInfoService/getFoodFlwOrdrItem"
     
-    # API 요청 (해당 월의 데이터를 필터링하기 위해 보통 전체를 가져온 후 파이썬으로 거릅니다)
     params = {
         "ServiceKey": api_key,
         "type": "json",
@@ -46,48 +47,82 @@ def get_data(month_str):
     
     try:
         response = requests.get(url, params=params)
-        if response.status_code == 200:
-            data = response.json()
-            items = data.get('response', {}).get('body', {}).get('items', [])
-            return items
-        return []
-    except:
-        return []
-
-# 4. 화면 출력 로직
-items = get_data(selected_month)
-
-if not items:
-    st.info(f"{selected_month}에 해당하는 행정처분 데이터가 없습니다.")
-else:
-    # 데이터를 보기 좋게 표로 정리
-    df = pd.DataFrame(items)
-    
-    # 실제 데이터의 '처분일자' 컬럼명이 API마다 다를 수 있으니 확인이 필요합니다 (예: PRN_DT 또는 DISPOS_DATE)
-    # 여기서는 예시로 전체 리스트를 보여주고 클릭 시 상세 정보를 보여주는 방식을 구현합니다.
-    
-    st.subheader(f"📊 {selected_month} 행정처분 업체 리스트")
-    
-    # 표에서 업체명만 추출해서 선택 박스 만들기
-    company_names = [item.get('ENTP_NAME', '알 수 없음') for item in items]
-    selected_company = st.selectbox("상세 정보를 보려면 업체를 선택하세요", ["업체를 선택하세요"] + company_names)
-
-    if selected_company != "업체를 선택하세요":
-        # 선택한 업체의 데이터만 찾기
-        detail = next((item for item in items if item.get('ENTP_NAME') == selected_company), None)
         
-        if detail:
-            st.markdown(f"""
-            <div class="penalty-card">
-                <h3>🏢 업체명: {detail.get('ENTP_NAME')}</h3>
-                <p><strong>⚠️ 위반법령:</strong> {detail.get('VIOLT_NM', '내용 없음')}</p>
-                <p><strong>📝 위반내용:</strong> {detail.get('VIOLT_CN', '내용 없음')}</p>
-                <p><strong>⚖️ 행정처분명:</strong> {detail.get('EXAATHR_NM', '내용 없음')}</p>
-                <p><strong>📅 처분기간:</strong> {detail.get('EXAATHR_PD', '내용 없음')}</p>
-                <p><strong>📌 기타참조:</strong> {detail.get('REMARK', '-')}</p>
-            </div>
-            """, unsafe_allow_html=True)
+        if response.status_code == 200:
+            try:
+                data = response.json()
+                # 정상적인 JSON 응답 구조 확인
+                if 'response' in data and 'body' in data['response']:
+                    items = data['response']['body'].get('items', [])
+                    return items, None
+                else:
+                    return None, f"API 응답 데이터 형식이 맞지 않습니다. 원본 데이터: {data}"
+            except Exception:
+                # JSON 변환 실패 시 (주로 API 키가 틀려 XML 에러 메시지를 보낼 때 발생)
+                return None, f"JSON 데이터 파싱 실패. API 키가 유효하지 않거나 등록 대기 중입니다. 식약처 서버 응답: {response.text[:200]}"
+        else:
+            return None, f"식약처 서버 연결 실패 (상태 코드: {response.status_code})"
+    except Exception as e:
+        return None, f"서버 요청 중 시스템 에러 발생: {e}"
+
+# 4. 화면 출력 및 월별 필터링 로직
+items, error_msg = get_data()
+
+# 에러가 발생한 경우 화면에 즉시 원인을 텍스트로 출력합니다.
+if error_msg:
+    st.error(f"데이터 호출 오류 발생: {error_msg}")
+elif not items:
+    st.info("API 호출은 정상적이나, 식약처 서버에서 넘겨준 데이터가 0건입니다.")
+else:
+    # 선택된 달(예: "2026.06")을 데이터에 맞춰 변환 (예: "202606")
+    selected_year_month = selected_month.replace(".", "")
     
-    # 전체 표도 아래에 참고용으로 표시
-    with st.expander("전체 데이터 표 보기"):
-        st.table(df[['ENTP_NAME', 'VIOLT_NM', 'EXAATHR_NM']])
+    filtered_items = []
+    date_column_name = ""
+    
+    # 데이터 구조에서 처분일자 컬럼명 확인 
+    # (식품 API는 주로 ADMDSP_DT, 의약품 API는 주로 EXAATHR_PD를 사용)
+    sample_item = items[0]
+    if 'ADMDSP_DT' in sample_item:
+        date_column_name = 'ADMDSP_DT'
+    elif 'EXAATHR_PD' in sample_item:
+        date_column_name = 'EXAATHR_PD'
+    elif 'DISPOS_DATE' in sample_item:
+        date_column_name = 'DISPOS_DATE'
+
+    if date_column_name:
+        for item in items:
+            date_val = str(item.get(date_column_name, ""))
+            if date_val.startswith(selected_year_month):
+                filtered_items.append(item)
+    else:
+        # 날짜 컬럼을 찾을 수 없는 경우 전체 출력
+        filtered_items = items
+        st.warning("응답 데이터에 날짜 컬럼이 존재하지 않아 해당 호출의 전체 데이터를 표시합니다.")
+
+    if not filtered_items:
+        st.info(f"{selected_month}에 해당하는 행정처분 데이터가 없습니다.")
+    else:
+        df = pd.DataFrame(filtered_items)
+        st.subheader(f"📊 {selected_month} 행정처분 업체 리스트")
+        
+        # 중복 없는 업체명 리스트 추출 (식품은 BSSH_NM, 의약품은 ENTP_NAME)
+        company_names = list(set([item.get('ENTP_NAME', item.get('BSSH_NM', '알 수 없음')) for item in filtered_items]))
+        selected_company = st.selectbox("상세 정보를 보려면 업체를 선택하세요", ["업체를 선택하세요"] + company_names)
+
+        if selected_company != "업체를 선택하세요":
+            detail = next((item for item in filtered_items if item.get('ENTP_NAME', item.get('BSSH_NM')) == selected_company), None)
+            
+            if detail:
+                st.markdown(f"""
+                <div class="penalty-card">
+                    <h3>🏢 업체명: {detail.get('ENTP_NAME', detail.get('BSSH_NM', '내용 없음'))}</h3>
+                    <p><strong>⚠️ 위반법령:</strong> {detail.get('VIOLT_NM', detail.get('LGL_CD_NM', '내용 없음'))}</p>
+                    <p><strong>📝 위반내용:</strong> {detail.get('VIOLT_CN', detail.get('VIOLT_CN', '내용 없음'))}</p>
+                    <p><strong>⚖️ 행정처분명:</strong> {detail.get('EXAATHR_NM', detail.get('ADMDSP_NM', '내용 없음'))}</p>
+                    <p><strong>📅 처분일자:</strong> {detail.get('EXAATHR_PD', detail.get('ADMDSP_DT', '내용 없음'))}</p>
+                </div>
+                """, unsafe_allow_html=True)
+        
+        with st.expander("전체 데이터 표 보기"):
+            st.dataframe(df)
