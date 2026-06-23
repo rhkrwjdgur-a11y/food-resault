@@ -27,10 +27,9 @@ for i in range(12):
 
 selected_month = st.selectbox("조회하고 싶은 달을 선택하세요", month_list)
 
-# 3. 데이터 가져오기 함수 및 팩트 체크 에러 검출 로직
+# 3. 데이터 가져오기 함수 및 서버 에러 내용 추출 로직
 def get_data():
     try:
-        # Streamlit Secrets에서 키를 가져옵니다.
         api_key = st.secrets["DATA_GO_KR_API_KEY"]
     except KeyError:
         return None, "Streamlit Settings의 Secrets에 'DATA_GO_KR_API_KEY'가 입력되지 않았습니다."
@@ -40,7 +39,7 @@ def get_data():
     
     params = {
         "ServiceKey": api_key,
-        "type": "json",
+        "type": "json",  # JSON 요청
         "numOfRows": "100",
         "pageNo": "1"
     }
@@ -51,37 +50,32 @@ def get_data():
         if response.status_code == 200:
             try:
                 data = response.json()
-                # 정상적인 JSON 응답 구조 확인
                 if 'response' in data and 'body' in data['response']:
                     items = data['response']['body'].get('items', [])
                     return items, None
                 else:
                     return None, f"API 응답 데이터 형식이 맞지 않습니다. 원본 데이터: {data}"
             except Exception:
-                # JSON 변환 실패 시 (주로 API 키가 틀려 XML 에러 메시지를 보낼 때 발생)
-                return None, f"JSON 데이터 파싱 실패. API 키가 유효하지 않거나 등록 대기 중입니다. 식약처 서버 응답: {response.text[:200]}"
+                return None, f"JSON 데이터 파싱 실패. 식약처 서버 응답: {response.text[:500]}"
         else:
-            return None, f"식약처 서버 연결 실패 (상태 코드: {response.status_code})"
+            # 500 에러를 포함한 모든 통신 실패 시, 식약처 서버가 뱉어낸 에러 원본 텍스트를 함께 출력합니다.
+            return None, f"상태 코드 {response.status_code}. 식약처 서버 원본 에러 내용: {response.text[:1000]}"
     except Exception as e:
         return None, f"서버 요청 중 시스템 에러 발생: {e}"
 
 # 4. 화면 출력 및 월별 필터링 로직
 items, error_msg = get_data()
 
-# 에러가 발생한 경우 화면에 즉시 원인을 텍스트로 출력합니다.
 if error_msg:
+    # 에러 내용을 화면에 붉은색 박스로 출력
     st.error(f"데이터 호출 오류 발생: {error_msg}")
 elif not items:
     st.info("API 호출은 정상적이나, 식약처 서버에서 넘겨준 데이터가 0건입니다.")
 else:
-    # 선택된 달(예: "2026.06")을 데이터에 맞춰 변환 (예: "202606")
     selected_year_month = selected_month.replace(".", "")
-    
     filtered_items = []
     date_column_name = ""
     
-    # 데이터 구조에서 처분일자 컬럼명 확인 
-    # (식품 API는 주로 ADMDSP_DT, 의약품 API는 주로 EXAATHR_PD를 사용)
     sample_item = items[0]
     if 'ADMDSP_DT' in sample_item:
         date_column_name = 'ADMDSP_DT'
@@ -96,7 +90,6 @@ else:
             if date_val.startswith(selected_year_month):
                 filtered_items.append(item)
     else:
-        # 날짜 컬럼을 찾을 수 없는 경우 전체 출력
         filtered_items = items
         st.warning("응답 데이터에 날짜 컬럼이 존재하지 않아 해당 호출의 전체 데이터를 표시합니다.")
 
@@ -106,7 +99,6 @@ else:
         df = pd.DataFrame(filtered_items)
         st.subheader(f"📊 {selected_month} 행정처분 업체 리스트")
         
-        # 중복 없는 업체명 리스트 추출 (식품은 BSSH_NM, 의약품은 ENTP_NAME)
         company_names = list(set([item.get('ENTP_NAME', item.get('BSSH_NM', '알 수 없음')) for item in filtered_items]))
         selected_company = st.selectbox("상세 정보를 보려면 업체를 선택하세요", ["업체를 선택하세요"] + company_names)
 
