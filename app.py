@@ -27,19 +27,18 @@ for i in range(12):
 
 selected_month = st.selectbox("조회하고 싶은 달을 선택하세요", month_list)
 
-# 3. 데이터 가져오기 함수 (실제 넘어오는 JSON 구조에 맞게 수정)
+# 3. 데이터 가져오기 함수 
 def get_data():
     try:
         api_key = st.secrets["DATA_GO_KR_API_KEY"]
     except KeyError:
         return None, "Streamlit Settings의 Secrets에 'DATA_GO_KR_API_KEY'가 입력되지 않았습니다."
     
-    # 식약처 식품제조가공업 API 주소
     url = "https://apis.data.go.kr/1471000/AdmmRsltFoodMnftPrcsService/getAdmmRsltFoodMnftPrcsBssh"
     
     params = {
         "ServiceKey": api_key,
-        "type": "json",  # 데이터포맷 JSON 요청
+        "type": "json",  
         "numOfRows": "100",
         "pageNo": "1"
     }
@@ -50,7 +49,6 @@ def get_data():
         if response.status_code == 200:
             try:
                 data = response.json()
-                # 수정됨: 넘어온 실제 데이터 구조('response' 없이 바로 'body' 안에 'items'가 있음) 반영
                 if 'body' in data and 'items' in data['body']:
                     items = data['body'].get('items', [])
                     return items, None
@@ -75,11 +73,11 @@ else:
     selected_year_month = selected_month.replace(".", "")
     filtered_items = []
     
-    # 수정됨: 실제 처분일자 컬럼명 (DSPS_DCSNDT 또는 DSPS_BGNDT) 반영
+    # 수정됨: 기준을 처분확정일(DSPS_DCSNDT)이 아닌 식약처 공표일자(PUBLIC_DT)로 변경
     for item in items:
-        date_val = str(item.get('DSPS_DCSNDT', item.get('DSPS_BGNDT', '')))
+        # 공표일자가 빈 값일 경우를 대비해 처분일자를 보조로 가져옵니다.
+        date_val = str(item.get('PUBLIC_DT', item.get('DSPS_DCSNDT', '')))
         
-        # '20240618' 처럼 날짜가 연월로 시작하는지 체크
         if date_val.startswith(selected_year_month):
             filtered_items.append(item)
 
@@ -87,9 +85,8 @@ else:
         st.info(f"{selected_month}에 해당하는 행정처분 데이터가 없습니다.")
     else:
         df = pd.DataFrame(filtered_items)
-        st.subheader(f"📊 {selected_month} 행정처분 업체 리스트")
+        st.subheader(f"📊 {selected_month} 행정처분 공표 리스트")
         
-        # 수정됨: 실제 업소명 컬럼(PRCSCITYPOINT_BSSHNM) 반영
         company_names = list(set([item.get('PRCSCITYPOINT_BSSHNM', '알 수 없음') for item in filtered_items]))
         selected_company = st.selectbox("상세 정보를 보려면 업체를 선택하세요", ["업체를 선택하세요"] + company_names)
 
@@ -97,7 +94,6 @@ else:
             detail = next((item for item in filtered_items if item.get('PRCSCITYPOINT_BSSHNM') == selected_company), None)
             
             if detail:
-                # 수정됨: 위반내용(VILTCN), 처분명(DSPSCN), 관련법(LAWORD_CD_NM), 주소(ADDR) 등 실제 컬럼 반영
                 st.markdown(f"""
                 <div class="penalty-card">
                     <h3>🏢 업체명: {detail.get('PRCSCITYPOINT_BSSHNM', '내용 없음')}</h3>
@@ -105,17 +101,18 @@ else:
                     <p><strong>📝 위반내용:</strong> {detail.get('VILTCN', '내용 없음')}</p>
                     <p><strong>⚖️ 행정처분명:</strong> {detail.get('DSPSCN', '내용 없음')}</p>
                     <p><strong>📅 처분시작일:</strong> {detail.get('DSPS_BGNDT', '내용 없음')}</p>
+                    <p><strong>📢 공표일자:</strong> {detail.get('PUBLIC_DT', '내용 없음')}</p>
                     <p><strong>📍 소재지:</strong> {detail.get('ADDR', '내용 없음')}</p>
                 </div>
                 """, unsafe_allow_html=True)
         
         with st.expander("전체 데이터 표 보기"):
-            # 전체 표를 볼 때 보기 편하도록 한글 컬럼명으로 변경하여 출력
-            display_df = df[['PRCSCITYPOINT_BSSHNM', 'LAWORD_CD_NM', 'DSPSCN', 'DSPS_BGNDT']].rename(
+            display_df = df[['PRCSCITYPOINT_BSSHNM', 'LAWORD_CD_NM', 'DSPSCN', 'PUBLIC_DT', 'DSPS_BGNDT']].rename(
                 columns={
                     'PRCSCITYPOINT_BSSHNM': '업체명',
                     'LAWORD_CD_NM': '위반법령',
                     'DSPSCN': '행정처분명',
+                    'PUBLIC_DT': '공표일자',
                     'DSPS_BGNDT': '처분시작일'
                 }
             )
