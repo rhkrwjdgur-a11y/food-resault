@@ -48,7 +48,8 @@ def get_data_origin():
     except KeyError:
         return [], "Secrets에 'MAFRA_API_KEY'가 등록되지 않았습니다."
     
-    url = f"http://211.237.50.150:7080/openapi/{api_key}/json/Grid_20151027000000000243_1/1/5000"
+    # 농관원 API의 1회 최대 호출 제한인 1000건으로 URL 수정 (최신순 1000건 확보)
+    url = f"http://211.237.50.150:7080/openapi/{api_key}/json/Grid_20151027000000000243_1/1/1000"
     
     try:
         response = requests.get(url)
@@ -105,17 +106,14 @@ df_origin_raw = pd.DataFrame(origin_list)
 
 df_origin = pd.DataFrame()
 if not df_origin_raw.empty:
-    # 📌 팩트 지정 품목 필터링 키워드 셋업 (우유, 두유, 음료, 환자식, 가공유, 유제품류 일체)
+    # 지정 품목 필터링 키워드 셋업
     target_keywords = ['우유', '두유', '음료', '환자', '가공유', '발효유', '원유', '유가공', '요거트', '치즈', '주스', '즙', '유제품', '분유', '유조리']
     origin_pattern = '|'.join(target_keywords)
     
-    # 해당 품목군만 정확하게 필터링
     df_origin_filtered = df_origin_raw[df_origin_raw['위반품목'].str.contains(origin_pattern, na=False, regex=True)].copy()
     
     if not df_origin_filtered.empty:
-        # 연도 컬럼 생성 (YYYYMM -> YYYY)
         df_origin_filtered['연도'] = df_origin_filtered['처분년월'].str[:4]
-        # 최신 연도 및 월 순으로 정렬
         df_origin = df_origin_filtered.sort_values(by='처분년월', ascending=False).reset_index(drop=True)
 
 # 에러 메시지 알림
@@ -131,7 +129,7 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# 5. 5개의 독립된 탭 구성 (통계 분석 탭 신설)
+# 5. 5개의 독립된 탭 구성
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "🔍 전체 업체 통합 검색", 
     "🥛 유가공·유제품 동향", 
@@ -259,13 +257,11 @@ with tab4:
     st.subheader("🌾 지정 품목 원산지 표시 적발 현황")
     
     if df_origin.empty:
-        st.info("해당 취급 품목군(우유/두유/음료/환자식/가공유)에 대입되는 원산지 위반 통계 데이터가 없습니다.")
+        st.info("해당 취급 품목군(우유/두유/음료/환자식/가공유)에 대입되는 최신 1000건 내 원산지 위반 통계 데이터가 없습니다.")
     else:
-        # 연도별 선택 박스 구성
         unique_years = sorted(list(df_origin['연도'].unique()), reverse=True)
         selected_year = st.selectbox("조회할 원산지 적발 연도를 선택하세요", unique_years, key="origin_year_select")
         
-        # 선택된 연도 데이터 필터링
         yearly_origin_df = df_origin[df_origin['연도'] == selected_year].reset_index(drop=True)
         
         st.markdown(f"""
@@ -293,47 +289,62 @@ with tab4:
             """, unsafe_allow_html=True)
 
 # ==========================================
-# 탭 5: 행정처분 통계 분석 (식약처 데이터 시각화 탭 - 신설)
+# 탭 5: 행정처분 통계 분석 (위반 내용 심층 분석)
 # ==========================================
 with tab5:
-    st.subheader("📊 식약처 행정처분 통계 현황판")
+    st.subheader("📊 식약처 행정처분 통계 현황 및 원인 분석")
     
     if df_public.empty:
         st.info("통계를 생성할 행정처분 기본 데이터가 존재하지 않습니다.")
     else:
-        # 데이터프레임 복사 후 연도 가공
         df_stats = df_public.copy()
         df_stats['연도'] = df_stats['처분확정일'].str.replace('-', '').str[:4]
-        df_stats['월'] = df_stats['처분확정일'].str.replace('-', '').str[4:6]
+        
+        # 연도별 선택 필터
+        unique_years_stat = sorted(list(df_stats['연도'].unique()), reverse=True)
+        selected_stat_year = st.selectbox("📊 조회할 기준 연도를 선택하세요", ["전체"] + unique_years_stat)
+        
+        if selected_stat_year != "전체":
+            df_stats_filtered = df_stats[df_stats['연도'] == selected_stat_year].reset_index(drop=True)
+        else:
+            df_stats_filtered = df_stats.copy()
+
+        st.markdown(f"""
+        <div class="info-box">
+            <strong>{selected_stat_year}년도 행정처분 총 {len(df_stats_filtered)}건 집계 완료</strong>
+        </div>
+        """, unsafe_allow_html=True)
         
         col1, col2 = st.columns(2)
         
         with col1:
             st.markdown("### 📅 연도별 행정처분 발생 추이")
-            # 연도별 카운트 계산
-            yearly_counts = df_stats.groupby('연도').size().reset_index(name='처분건수')
-            yearly_counts = yearly_counts.sort_values(by='연도')
-            
-            # 차트 출력을 위해 인덱스 지정
-            chart_data_year = yearly_counts.set_index('연도')
-            st.bar_chart(chart_data_year, color="#e74c3c")
-            st.dataframe(yearly_counts, use_container_width=True, hide_index=True)
+            if selected_stat_year == "전체":
+                yearly_counts = df_stats_filtered.groupby('연도').size().reset_index(name='처분건수')
+                yearly_counts = yearly_counts.sort_values(by='연도')
+                chart_data_year = yearly_counts.set_index('연도')
+                st.bar_chart(chart_data_year, color="#e74c3c")
+            else:
+                st.info(f"{selected_stat_year}년 단일 연도가 선택되어 추이 그래프가 생략되었습니다. '전체'를 선택하면 추이를 볼 수 있습니다.")
             
         with col2:
             st.markdown("### ⚖️ 가장 많이 발생하는 위반 법령 TOP 10")
-            # 위반법령별 카운트 계산
-            law_counts = df_stats.groupby('위반법령').size().reset_index(name='적발건수')
+            law_counts = df_stats_filtered.groupby('위반법령').size().reset_index(name='적발건수')
             law_counts = law_counts.sort_values(by='적발건수', ascending=False).head(10).reset_index(drop=True)
-            
             chart_data_law = law_counts.set_index('위반법령')
             st.bar_chart(chart_data_law, color="#2980b9")
-            st.dataframe(law_counts, use_container_width=True, hide_index=True)
             
         st.markdown("---")
-        st.markdown("### 📝 확정된 행정처분 유형 종류별 통계")
+        st.markdown("### 🔍 위반법령별 구체적 적발 사유 (심층 분석)")
+        st.markdown('<p class="guide-text">👇 아래 표에서 특정 위반법령을 클릭하면, 해당 법령으로 적발된 실제 위반 내용과 사유를 상세하게 파악할 수 있습니다.</p>', unsafe_allow_html=True)
         
-        # 실제 처분 내용 종류별 통계 리스트화
-        disposal_counts = df_stats.groupby('행정처분명').size().reset_index(name='처분건수')
-        disposal_counts = disposal_counts.sort_values(by='처분건수', ascending=False).reset_index(drop=True)
+        event_law = st.dataframe(law_counts, use_container_width=True, on_select="rerun", selection_mode="single-row")
         
-        st.dataframe(disposal_counts, use_container_width=True, hide_index=True)
+        if len(event_law.selection.rows) > 0:
+            selected_law = law_counts.iloc[event_law.selection.rows[0]]['위반법령']
+            st.markdown(f"#### 🚨 '{selected_law}' 실제 위반 상세 사례")
+            
+            detail_df = df_stats_filtered[df_stats_filtered['위반법령'] == selected_law][['업체명', '위반내용', '행정처분명', '처분확정일']].reset_index(drop=True)
+            st.dataframe(detail_df, use_container_width=True, hide_index=True)
+        else:
+            st.info("👆 위 표에서 현장 점검의 기준을 세우고 싶은 위반법령 항목을 클릭해 보세요.")
