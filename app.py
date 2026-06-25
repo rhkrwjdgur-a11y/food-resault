@@ -28,27 +28,25 @@ def get_data_integrated():
     except KeyError:
         return [], "Secrets에 'FOOD_SAFETY_API_KEY'가 없습니다. 식품안전나라 키를 확인해 주십시오."
     
-    # 팩트: 한 번에 1000건의 최신 통합 데이터(식품+축산물)를 호출합니다.
     service_id = "I0470"
-    url = f"http://openapi.foodsafetykorea.go.kr/api/{api_key}/{service_id}/json/1/1000"
+    all_items = []
     
     try:
-        response = requests.get(url)
-        if response.status_code == 200:
-            try:
+        # 1000건 제한을 우회하기 위해 2페이지(2000건) 자동 연속 호출
+        for i in range(2):
+            start = i * 1000 + 1
+            end = (i + 1) * 1000
+            url = f"http://openapi.foodsafetykorea.go.kr/api/{api_key}/{service_id}/json/{start}/{end}"
+            response = requests.get(url, timeout=15)
+            
+            if response.status_code == 200:
                 data = response.json()
                 if service_id in data and 'row' in data[service_id]:
-                    return data[service_id]['row'], None
-                else:
-                    msg = data.get('RESULT', {}).get('MSG', '알 수 없는 에러')
-                    return [], f"통합망 API 요청 거부: {msg}"
-            except ValueError:
-                error_text = response.text[:200].replace('\n', ' ')
-                return [], f"통합망 API 데이터 형식 오류: {error_text}"
-        else:
-            return [], f"통합망 API 통신 에러 코드: {response.status_code}"
+                    all_items.extend(data[service_id]['row'])
     except Exception as e:
-        return [], f"통합망 API 통신 장애: {e}"
+        return all_items, f"통합망 API 통신 장애: {e}"
+        
+    return all_items, None
 
 # 3. 농관원 원산지 적발현황 데이터 로드 (통계 데이터)
 def get_data_origin():
@@ -57,45 +55,53 @@ def get_data_origin():
     except KeyError:
         return [], "Secrets에 'MAFRA_API_KEY'가 등록되지 않았습니다."
     
-    url = f"http://211.237.50.150:7080/openapi/{api_key}/json/Grid_20151027000000000243_1/1/1000"
-    
+    all_items = []
     try:
-        response = requests.get(url)
-        if response.status_code == 200:
-            try:
+        # 농산물 비중이 크므로, 유가공품을 더 많이 찾기 위해 3페이지(3000건) 자동 연속 호출
+        for i in range(3):
+            start = i * 1000 + 1
+            end = (i + 1) * 1000
+            url = f"http://211.237.50.150:7080/openapi/{api_key}/json/Grid_20151027000000000243_1/{start}/{end}"
+            response = requests.get(url, timeout=15)
+            
+            if response.status_code == 200:
                 data = response.json()
                 grid_key = 'Grid_20151027000000000243_1'
                 if grid_key in data and 'row' in data[grid_key]:
-                    return data[grid_key]['row'], None
-                else:
-                    return [], f"원산지 API 데이터 불일치: {str(data)[:150]}"
-            except ValueError:
-                return [], f"원산지 API 파싱 실패. 응답: {response.text[:100]}"
-        else:
-            return [], f"원산지 API 상태 코드 에러: {response.status_code}"
+                    all_items.extend(data[grid_key]['row'])
     except Exception as e:
-        return [], f"원산지 API 통신 에러: {e}"
+        return all_items, f"원산지 API 통신 장애: {e}"
+        
+    return all_items, None
 
 # 4. 데이터 수집 및 전처리
-with st.spinner("통합 행정처분(축산물 포함) 및 원산지 데이터를 수집 중입니다..."):
+with st.spinner("통합망(2,000건) 및 원산지(3,000건) 데이터를 딥서치 수집 중입니다..."):
     items_integrated, err_integrated = get_data_integrated()
     items_origin, err_origin = get_data_origin()
 
 # 통합 행정처분 데이터 전처리
 integrated_list = []
 for item in items_integrated:
+    comp_name = item.get('BSSH_NM') or item.get('PRCSCITYPOINT_BSSHNM') or item.get('ENTP_NM') or item.get('CMPNY_NM') or '확인불가'
+    law_name = item.get('VIOLT_NM') or item.get('LAWORD_CD_NM') or '내용 없음'
+    viol_content = item.get('VIOLT_CN') or item.get('VILTCN') or '내용 없음'
+    disp_name = item.get('DISPOS_CN') or item.get('DISPOS_NM') or item.get('DSPSCN') or '내용 없음'
+    disp_date = str(item.get('DISPOS_DT') or item.get('DSPS_DCSNDT') or item.get('ADM_DISP_DT') or '내용 없음')
+    address = item.get('ADDR') or item.get('SITE_ADDR_RD') or '내용 없음'
+
     integrated_list.append({
-        '업체명': item.get('BSSH_NM', '내용 없음'),
-        '위반법령': item.get('VIOLT_NM', '내용 없음'),
-        '위반내용': item.get('VIOLT_CN', '내용 없음'),
-        '행정처분명': item.get('DISPOS_CN', item.get('DISPOS_NM', '내용 없음')),
-        '처분확정일': str(item.get('DISPOS_DT', '내용 없음')),
-        '소재지': item.get('ADDR', '내용 없음'),
+        '업체명': comp_name,
+        '위반법령': law_name,
+        '위반내용': viol_content,
+        '행정처분명': disp_name,
+        '처분확정일': disp_date,
+        '소재지': address,
         '출처': '식품안전나라(토탈)'
     })
+
 df_integrated = pd.DataFrame(integrated_list)
 if not df_integrated.empty:
-    df_integrated = df_integrated.drop_duplicates(subset=['업체명', '처분확정일'], keep='first')
+    df_integrated = df_integrated.drop_duplicates(subset=['업체명', '위반내용', '처분확정일'], keep='first')
     df_integrated = df_integrated.sort_values(by='처분확정일', ascending=False).reset_index(drop=True)
 
 # 원산지 통계 데이터 전처리 및 요청 품목 필터링
@@ -114,7 +120,6 @@ df_origin_raw = pd.DataFrame(origin_list)
 
 df_origin = pd.DataFrame()
 if not df_origin_raw.empty:
-    # 유가공업 관련 핵심 지정 품목 필터링
     target_keywords = ['우유', '두유', '음료', '환자', '가공유', '발효유', '원유', '유가공', '요거트', '치즈', '주스', '즙', '유제품', '분유', '유조리']
     origin_pattern = '|'.join(target_keywords)
     
@@ -133,7 +138,7 @@ if err_origin:
 # 전체 현황판 출력
 st.markdown(f"""
 <div class="info-box">
-    <strong>💡 실시간 수집 현황</strong>: 통합 행정처분망 <strong>{len(df_integrated)}건</strong> / 취급 품목 지정 원산지 통계 <strong>{len(df_origin)}건</strong> 연동 완료
+    <strong>💡 실시간 딥서치 수집 현황</strong>: 통합 행정처분망 <strong>{len(df_integrated)}건</strong> / 취급 품목 지정 원산지 통계 <strong>{len(df_origin)}건</strong> 연동 완료
 </div>
 """, unsafe_allow_html=True)
 
@@ -265,7 +270,7 @@ with tab4:
     st.subheader("🌾 지정 품목 원산지 표시 적발 현황")
     
     if df_origin.empty:
-        st.info("해당 취급 품목군에 대입되는 최신 1000건 내 원산지 위반 통계 데이터가 없습니다.")
+        st.info("해당 취급 품목군에 대입되는 원산지 위반 통계 데이터가 없습니다.")
     else:
         unique_years = sorted(list(df_origin['연도'].unique()), reverse=True)
         selected_year = st.selectbox("조회할 원산지 적발 연도를 선택하세요", unique_years, key="origin_year_select")
@@ -328,7 +333,7 @@ with tab5:
             st.markdown("### 📅 연도별 행정처분 발생 추이")
             if selected_stat_year == "전체":
                 yearly_counts = df_stats_filtered.groupby('연도').size().reset_index(name='처분건수')
-                yearly_counts = yearly_counts.sort_values(by='연도')
+                yearly_counts = yearly_counts.sort_values(by='연度')
                 chart_data_year = yearly_counts.set_index('연도')
                 st.bar_chart(chart_data_year, color="#e74c3c")
             else:
