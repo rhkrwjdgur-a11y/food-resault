@@ -32,7 +32,7 @@ def get_data_integrated():
     all_items = []
     
     try:
-        # 식당 데이터에 밀리지 않도록 5페이지(5000건) 자동 연속 호출
+        # 식당 및 판매업 데이터에 밀리지 않도록 5페이지(5000건) 자동 연속 호출
         for i in range(5):
             start = i * 1000 + 1
             end = (i + 1) * 1000
@@ -102,14 +102,21 @@ df_integrated_raw = pd.DataFrame(integrated_list)
 df_integrated = pd.DataFrame()
 
 if not df_integrated_raw.empty:
-    # 📌 팩트 로직: 불필요한 접객업(식당, 카페 등) 키워드 원천 차단 블랙리스트
-    exclude_keywords = ['카페', '치킨', '피자', '호프', '포차', '식당', '반점', '다방', '음식점', '제과점', '버거', '김밥', '떡볶이', '갈비', '국밥', '가든', '분식']
+    # 📌 팩트 로직: 접객업뿐만 아니라 단란주점, 유흥주점 및 유통 판매업체(마트/상사/편의점 등)까지 완벽 차단 블랙리스트 확장
+    exclude_keywords = [
+        '카페', '치킨', '피자', '호프', '포차', '식당', '반점', '다방', '음식점', '제과점', 
+        '버거', '김밥', '떡볶이', '갈비', '국밥', '가든', '분식', '주점', '단란', '유흥', 
+        '판매', '마트', '유통', '상사', '슈퍼', '편의점', '백화점', '시네마', '상점', '할인마트'
+    ]
     exclude_pattern = '|'.join(exclude_keywords)
     
-    # 블랙리스트 단어가 업체명에 포함되지 않은(~) 데이터만 살림
-    df_integrated = df_integrated_raw[~df_integrated_raw['업체명'].str.contains(exclude_pattern, na=False, regex=True)].copy()
+    # 업체명 또는 위반내용에 해당 유통·접객업 키워드가 포함되지 않은 정통 제조 가공업 데이터만 필터링
+    df_integrated = df_integrated_raw[
+        (~df_integrated_raw['업체명'].str.contains(exclude_pattern, na=False, regex=True)) &
+        (~df_integrated_raw['위반내용'].str.contains(exclude_pattern, na=False, regex=True))
+    ].copy()
     
-    # 중복 제거 후 무조건 가장 최신 날짜순으로 정렬
+    # 중복 제거 후 가장 최신 날짜순 정렬
     df_integrated = df_integrated.drop_duplicates(subset=['업체명', '위반내용', '처분확정일'], keep='first')
     df_integrated = df_integrated.sort_values(by='처분확정일', ascending=False).reset_index(drop=True)
 
@@ -147,7 +154,7 @@ if err_origin:
 # 전체 현황판 출력
 st.markdown(f"""
 <div class="info-box">
-    <strong>💡 실시간 딥서치 수집 현황</strong>: 통합 행정처분망 <strong>{len(df_integrated)}건</strong> (접객업 필터링 완료) / 취급 품목 지정 원산지 통계 <strong>{len(df_origin)}건</strong> 연동 완료
+    <strong>💡 실시간 딥서치 수집 현황</strong>: 통합 행정처분망 <strong>{len(df_integrated)}건</strong> (접객업 및 유통·판매업 필터링 완료) / 취급 품목 지정 원산지 통계 <strong>{len(df_origin)}건</strong> 연동 완료
 </div>
 """, unsafe_allow_html=True)
 
@@ -332,7 +339,7 @@ with tab5:
 
         st.markdown(f"""
         <div class="info-box">
-            <strong>{selected_stat_year}년도 행정처분 총 {len(df_stats_filtered)}건 집계 완료 (접객업 제외)</strong>
+            <strong>{selected_stat_year}년도 행정처분 총 {len(df_stats_filtered)}건 집계 완료 (유흥·유통·접객업 완전 제외)</strong>
         </div>
         """, unsafe_allow_html=True)
         
