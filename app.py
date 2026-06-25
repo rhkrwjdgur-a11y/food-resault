@@ -21,7 +21,7 @@ st.markdown("""
 
 st.title("🥛 일반식품·축산물 행정처분 및 원산지 통합 모니터링")
 
-# 2. 통합 행정처분 데이터 로드 (5000건 확보로 확장)
+# 2. 통합 행정처분 데이터 로드 (10,000건 최신 확보로 대폭 확장)
 def get_data_integrated():
     try:
         api_key = st.secrets["FOOD_SAFETY_API_KEY"]
@@ -32,12 +32,12 @@ def get_data_integrated():
     all_items = []
     
     try:
-        # 식당 및 판매업 데이터에 밀리지 않도록 5페이지(5000건) 자동 연속 호출
-        for i in range(5):
+        # 방대한 접객업 데이터에 밀리지 않도록 10페이지(10,000건) 자동 연속 호출
+        for i in range(10):
             start = i * 1000 + 1
             end = (i + 1) * 1000
             url = f"http://openapi.foodsafetykorea.go.kr/api/{api_key}/{service_id}/json/{start}/{end}"
-            response = requests.get(url, timeout=15)
+            response = requests.get(url, timeout=20)
             
             if response.status_code == 200:
                 data = response.json()
@@ -74,7 +74,7 @@ def get_data_origin():
     return all_items, None
 
 # 4. 데이터 수집 및 전처리
-with st.spinner("통합망(5,000건) 및 원산지(3,000건) 데이터를 딥서치 수집 중입니다..."):
+with st.spinner("통합망(10,000건) 및 원산지(3,000건) 데이터를 딥서치 수집 중입니다. (약 10~15초 소요)..."):
     items_integrated, err_integrated = get_data_integrated()
     items_origin, err_origin = get_data_origin()
 
@@ -102,21 +102,25 @@ df_integrated_raw = pd.DataFrame(integrated_list)
 df_integrated = pd.DataFrame()
 
 if not df_integrated_raw.empty:
-    # 📌 팩트 로직: 접객업뿐만 아니라 단란주점, 유흥주점 및 유통 판매업체(마트/상사/편의점 등)까지 완벽 차단 블랙리스트 확장
+    # 📌 팩트 로직: 제조·가공업을 제외한 모든 서비스(접객/의료/유통/숙박/오락) 초강력 블랙리스트 적용
     exclude_keywords = [
         '카페', '치킨', '피자', '호프', '포차', '식당', '반점', '다방', '음식점', '제과점', 
         '버거', '김밥', '떡볶이', '갈비', '국밥', '가든', '분식', '주점', '단란', '유흥', 
-        '판매', '마트', '유통', '상사', '슈퍼', '편의점', '백화점', '시네마', '상점', '할인마트'
+        '판매', '마트', '유통', '상사', '슈퍼', '편의점', '백화점', '시네마', '상점', '할인마트',
+        '노래', '뮤직', '병원', '의원', '약국', '요양', '커피', '브루', '배떡', '가요방', 
+        '대리점', '보급소', '총판', '가맹점', '프랜차이즈', '학원', '어린이집', '유치원', '학교',
+        '급식', '뷔페', '출장', '웨딩', '예식', '장례', '호텔', '모텔', '여관', '리조트', 
+        '사우나', '목욕', 'PC', '피씨', '당구', '골프', '휴게소', '스마일', '푸드코트'
     ]
     exclude_pattern = '|'.join(exclude_keywords)
     
-    # 업체명 또는 위반내용에 해당 유통·접객업 키워드가 포함되지 않은 정통 제조 가공업 데이터만 필터링
+    # 블랙리스트 단어가 포함되지 않은 정통 제조 및 가공 공장 데이터만 생존
     df_integrated = df_integrated_raw[
         (~df_integrated_raw['업체명'].str.contains(exclude_pattern, na=False, regex=True)) &
         (~df_integrated_raw['위반내용'].str.contains(exclude_pattern, na=False, regex=True))
     ].copy()
     
-    # 중복 제거 후 가장 최신 날짜순 정렬
+    # 중복 제거 후 가장 최신 날짜순 정렬 보장
     df_integrated = df_integrated.drop_duplicates(subset=['업체명', '위반내용', '처분확정일'], keep='first')
     df_integrated = df_integrated.sort_values(by='처분확정일', ascending=False).reset_index(drop=True)
 
@@ -154,7 +158,7 @@ if err_origin:
 # 전체 현황판 출력
 st.markdown(f"""
 <div class="info-box">
-    <strong>💡 실시간 딥서치 수집 현황</strong>: 통합 행정처분망 <strong>{len(df_integrated)}건</strong> (접객업 및 유통·판매업 필터링 완료) / 취급 품목 지정 원산지 통계 <strong>{len(df_origin)}건</strong> 연동 완료
+    <strong>💡 실시간 딥서치 수집 현황</strong>: 통합 행정처분망 <strong>{len(df_integrated)}건</strong> (비제조업 완벽 차단) / 취급 품목 지정 원산지 통계 <strong>{len(df_origin)}건</strong> 연동 완료
 </div>
 """, unsafe_allow_html=True)
 
@@ -242,7 +246,7 @@ with tab2:
 # 탭 3: 월별 신규 등록 내역
 # ==========================================
 with tab3:
-    st.subheader("📅 월별 제조가공업 행정처분 리스트")
+    st.subheader("📅 월별 제조·가공업 행정처분 리스트")
     
     available_months = set()
     for d in df_integrated['처분확정일']:
@@ -286,7 +290,7 @@ with tab4:
     st.subheader("🌾 지정 품목 원산지 표시 적발 현황")
     
     if df_origin.empty:
-        st.info("해당 취급 품목군에 대입되는 최신 3000건 내 원산지 위반 통계 데이터가 없습니다.")
+        st.info("해당 취급 품목군에 대입되는 원산지 위반 통계 데이터가 없습니다.")
     else:
         unique_years = sorted(list(df_origin['연도'].unique()), reverse=True)
         selected_year = st.selectbox("조회할 원산지 적발 연도를 선택하세요", unique_years, key="origin_year_select")
@@ -339,7 +343,7 @@ with tab5:
 
         st.markdown(f"""
         <div class="info-box">
-            <strong>{selected_stat_year}년도 행정처분 총 {len(df_stats_filtered)}건 집계 완료 (유흥·유통·접객업 완전 제외)</strong>
+            <strong>{selected_stat_year}년도 행정처분 총 {len(df_stats_filtered)}건 집계 완료 (제조·가공업 전용)</strong>
         </div>
         """, unsafe_allow_html=True)
         
