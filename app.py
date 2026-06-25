@@ -19,27 +19,36 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🥛 식약처 행정처분 및 원산지 위반 통합 모니터링")
+st.title("🥛 일반식품·축산물 행정처분 및 원산지 통합 모니터링")
 
-# 2. 식약처 행정처분 데이터 로드 (개별 업체 데이터)
-def get_data_public():
+# 2. 통합 행정처분 데이터 로드 (일반식품 + 축산물 모두 포함하는 I0470 토탈 API 적용)
+def get_data_integrated():
     try:
-        api_key = st.secrets["DATA_GO_KR_API_KEY"]
+        api_key = st.secrets["FOOD_SAFETY_API_KEY"]
     except KeyError:
-        return [], "Secrets에 'DATA_GO_KR_API_KEY'가 없습니다."
+        return [], "Secrets에 'FOOD_SAFETY_API_KEY'가 없습니다. 식품안전나라 키를 확인해 주십시오."
     
-    url = "https://apis.data.go.kr/1471000/AdmmRsltFoodMnftPrcsService/getAdmmRsltFoodMnftPrcsBssh"
-    params = {"ServiceKey": api_key, "type": "json", "numOfRows": "500", "pageNo": "1"}
+    # 팩트: 한 번에 1000건의 최신 통합 데이터(식품+축산물)를 호출합니다.
+    service_id = "I0470"
+    url = f"http://openapi.foodsafetykorea.go.kr/api/{api_key}/{service_id}/json/1/1000"
     
     try:
-        response = requests.get(url, params=params)
+        response = requests.get(url)
         if response.status_code == 200:
-            data = response.json()
-            if 'body' in data and 'items' in data['body']:
-                return data['body'].get('items', []), None
-        return [], "식약처 데이터 서버 응답 오류"
+            try:
+                data = response.json()
+                if service_id in data and 'row' in data[service_id]:
+                    return data[service_id]['row'], None
+                else:
+                    msg = data.get('RESULT', {}).get('MSG', '알 수 없는 에러')
+                    return [], f"통합망 API 요청 거부: {msg}"
+            except ValueError:
+                error_text = response.text[:200].replace('\n', ' ')
+                return [], f"통합망 API 데이터 형식 오류: {error_text}"
+        else:
+            return [], f"통합망 API 통신 에러 코드: {response.status_code}"
     except Exception as e:
-        return [], f"식약처 데이터 통신 에러: {e}"
+        return [], f"통합망 API 통신 장애: {e}"
 
 # 3. 농관원 원산지 적발현황 데이터 로드 (통계 데이터)
 def get_data_origin():
@@ -48,7 +57,6 @@ def get_data_origin():
     except KeyError:
         return [], "Secrets에 'MAFRA_API_KEY'가 등록되지 않았습니다."
     
-    # 농관원 API의 1회 최대 호출 제한인 1000건으로 URL 수정 (최신순 1000건 확보)
     url = f"http://211.237.50.150:7080/openapi/{api_key}/json/Grid_20151027000000000243_1/1/1000"
     
     try:
@@ -62,33 +70,33 @@ def get_data_origin():
                 else:
                     return [], f"원산지 API 데이터 불일치: {str(data)[:150]}"
             except ValueError:
-                return [], f"원산지 API 파싱 실패 (키 동기화 대기 중일 수 있습니다). 응답: {response.text[:100]}"
+                return [], f"원산지 API 파싱 실패. 응답: {response.text[:100]}"
         else:
             return [], f"원산지 API 상태 코드 에러: {response.status_code}"
     except Exception as e:
         return [], f"원산지 API 통신 에러: {e}"
 
 # 4. 데이터 수집 및 전처리
-with st.spinner("식약처 및 원산지 데이터를 실시간으로 수집 중입니다..."):
-    items_public, err_public = get_data_public()
+with st.spinner("통합 행정처분(축산물 포함) 및 원산지 데이터를 수집 중입니다..."):
+    items_integrated, err_integrated = get_data_integrated()
     items_origin, err_origin = get_data_origin()
 
-# 식약처 데이터 전처리
-public_list = []
-for item in items_public:
-    public_list.append({
-        '업체명': item.get('PRCSCITYPOINT_BSSHNM', '내용 없음'),
-        '위반법령': item.get('LAWORD_CD_NM', '내용 없음'),
-        '위반내용': item.get('VILTCN', '내용 없음'),
-        '행정처분명': item.get('DSPSCN', '내용 없음'),
-        '처분확정일': str(item.get('DSPS_DCSNDT', '내용 없음')),
+# 통합 행정처분 데이터 전처리
+integrated_list = []
+for item in items_integrated:
+    integrated_list.append({
+        '업체명': item.get('BSSH_NM', '내용 없음'),
+        '위반법령': item.get('VIOLT_NM', '내용 없음'),
+        '위반내용': item.get('VIOLT_CN', '내용 없음'),
+        '행정처분명': item.get('DISPOS_CN', item.get('DISPOS_NM', '내용 없음')),
+        '처분확정일': str(item.get('DISPOS_DT', '내용 없음')),
         '소재지': item.get('ADDR', '내용 없음'),
-        '출처': '식약처'
+        '출처': '식품안전나라(토탈)'
     })
-df_public = pd.DataFrame(public_list)
-if not df_public.empty:
-    df_public = df_public.drop_duplicates(subset=['업체명', '처분확정일'], keep='first')
-    df_public = df_public.sort_values(by='처분확정일', ascending=False).reset_index(drop=True)
+df_integrated = pd.DataFrame(integrated_list)
+if not df_integrated.empty:
+    df_integrated = df_integrated.drop_duplicates(subset=['업체명', '처분확정일'], keep='first')
+    df_integrated = df_integrated.sort_values(by='처분확정일', ascending=False).reset_index(drop=True)
 
 # 원산지 통계 데이터 전처리 및 요청 품목 필터링
 origin_list = []
@@ -106,7 +114,7 @@ df_origin_raw = pd.DataFrame(origin_list)
 
 df_origin = pd.DataFrame()
 if not df_origin_raw.empty:
-    # 지정 품목 필터링 키워드 셋업
+    # 유가공업 관련 핵심 지정 품목 필터링
     target_keywords = ['우유', '두유', '음료', '환자', '가공유', '발효유', '원유', '유가공', '요거트', '치즈', '주스', '즙', '유제품', '분유', '유조리']
     origin_pattern = '|'.join(target_keywords)
     
@@ -117,15 +125,15 @@ if not df_origin_raw.empty:
         df_origin = df_origin_filtered.sort_values(by='처분년월', ascending=False).reset_index(drop=True)
 
 # 에러 메시지 알림
-if err_public:
-    st.warning(f"식약처 연동 중 알림: {err_public}")
+if err_integrated:
+    st.warning(f"통합 행정처분 연동 알림: {err_integrated}")
 if err_origin:
-    st.error(f"원산지 연동 중 알림: {err_origin}")
+    st.error(f"원산지 연동 알림: {err_origin}")
 
 # 전체 현황판 출력
 st.markdown(f"""
 <div class="info-box">
-    <strong>💡 실시간 수집 현황</strong>: 식약처 행정처분 <strong>{len(df_public)}건</strong> / 취급 품목 지정 농관원 원산지 통계 <strong>{len(df_origin)}건</strong> 연동 완료
+    <strong>💡 실시간 수집 현황</strong>: 통합 행정처분망 <strong>{len(df_integrated)}건</strong> / 취급 품목 지정 원산지 통계 <strong>{len(df_origin)}건</strong> 연동 완료
 </div>
 """, unsafe_allow_html=True)
 
@@ -139,14 +147,14 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 ])
 
 # ==========================================
-# 탭 1: 전체 업체 통합 검색 (식약처)
+# 탭 1: 전체 업체 통합 검색
 # ==========================================
 with tab1:
     st.subheader("🔍 특정 업체 행정처분 이력 검색")
     search_keyword = st.text_input("검색할 업체명을 입력하세요", key="search_input")
     
     if search_keyword:
-        search_df = df_public[df_public['업체명'].str.contains(search_keyword, na=False)].reset_index(drop=True)
+        search_df = df_integrated[df_integrated['업체명'].str.contains(search_keyword, na=False)].reset_index(drop=True)
         
         if search_df.empty:
             st.success(f"'{search_keyword}'(으)로 검색된 내역이 없습니다.")
@@ -172,7 +180,7 @@ with tab1:
                 """, unsafe_allow_html=True)
 
 # ==========================================
-# 탭 2: 유가공·유제품 동향 (식약처)
+# 탭 2: 유가공·유제품 동향
 # ==========================================
 with tab2:
     st.subheader("🥛 동종업계(유제품/유가공) 처분 동향")
@@ -185,7 +193,7 @@ with tab2:
     """, unsafe_allow_html=True)
 
     dairy_pattern = '|'.join(dairy_keywords)
-    dairy_df = df_public[df_public['업체명'].str.contains(dairy_pattern, na=False, regex=True)].reset_index(drop=True)
+    dairy_df = df_integrated[df_integrated['업체명'].str.contains(dairy_pattern, na=False, regex=True)].reset_index(drop=True)
 
     if dairy_df.empty:
         st.info("현재 공표된 내역 중 유가공/유제품 관련 업체의 적발 건은 없습니다.")
@@ -210,13 +218,13 @@ with tab2:
             """, unsafe_allow_html=True)
 
 # ==========================================
-# 탭 3: 월별 신규 등록 내역 (식약처)
+# 탭 3: 월별 신규 등록 내역
 # ==========================================
 with tab3:
-    st.subheader("📅 월별 행정처분 등록 리스트")
+    st.subheader("📅 월별 통합 행정처분 등록 리스트")
     
     available_months = set()
-    for d in df_public['처분확정일']:
+    for d in df_integrated['처분확정일']:
         date_val = str(d).replace('-', '')
         if len(date_val) >= 6 and date_val.isdigit():
             available_months.add(f"{date_val[:4]}.{date_val[4:6]}")
@@ -227,7 +235,7 @@ with tab3:
         selected_month = st.selectbox("조회할 처분 월을 선택하세요", month_list)
         selected_year_month = selected_month.replace(".", "")
         
-        month_df = df_public[df_public['처분확정일'].str.replace('-', '').str.startswith(selected_year_month, na=False)].reset_index(drop=True)
+        month_df = df_integrated[df_integrated['처분확정일'].str.replace('-', '').str.startswith(selected_year_month, na=False)].reset_index(drop=True)
         
         if not month_df.empty:
             month_display = month_df[['업체명', '위반법령', '행정처분명', '처분확정일', '출처']].copy()
@@ -251,13 +259,13 @@ with tab3:
         st.info("표시할 수 있는 월별 데이터가 없습니다.")
 
 # ==========================================
-# 탭 4: 원산지 위반 통계 (농관원 - 지정 품목 및 연도별 그룹화)
+# 탭 4: 원산지 위반 통계
 # ==========================================
 with tab4:
     st.subheader("🌾 지정 품목 원산지 표시 적발 현황")
     
     if df_origin.empty:
-        st.info("해당 취급 품목군(우유/두유/음료/환자식/가공유)에 대입되는 최신 1000건 내 원산지 위반 통계 데이터가 없습니다.")
+        st.info("해당 취급 품목군에 대입되는 최신 1000건 내 원산지 위반 통계 데이터가 없습니다.")
     else:
         unique_years = sorted(list(df_origin['연도'].unique()), reverse=True)
         selected_year = st.selectbox("조회할 원산지 적발 연도를 선택하세요", unique_years, key="origin_year_select")
@@ -289,18 +297,17 @@ with tab4:
             """, unsafe_allow_html=True)
 
 # ==========================================
-# 탭 5: 행정처분 통계 분석 (위반 내용 심층 분석)
+# 탭 5: 행정처분 통계 분석
 # ==========================================
 with tab5:
-    st.subheader("📊 식약처 행정처분 통계 현황 및 원인 분석")
+    st.subheader("📊 통합 행정처분 통계 현황 및 원인 분석")
     
-    if df_public.empty:
+    if df_integrated.empty:
         st.info("통계를 생성할 행정처분 기본 데이터가 존재하지 않습니다.")
     else:
-        df_stats = df_public.copy()
+        df_stats = df_integrated.copy()
         df_stats['연도'] = df_stats['처분확정일'].str.replace('-', '').str[:4]
         
-        # 연도별 선택 필터
         unique_years_stat = sorted(list(df_stats['연도'].unique()), reverse=True)
         selected_stat_year = st.selectbox("📊 조회할 기준 연도를 선택하세요", ["전체"] + unique_years_stat)
         
