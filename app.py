@@ -21,7 +21,7 @@ st.markdown("""
 
 st.title("🥛 일반식품·축산물 행정처분 및 원산지 통합 모니터링")
 
-# 2. 통합 행정처분 데이터 로드 (일반식품 + 축산물 모두 포함하는 I0470 토탈 API 적용)
+# 2. 통합 행정처분 데이터 로드 (5000건 확보로 확장)
 def get_data_integrated():
     try:
         api_key = st.secrets["FOOD_SAFETY_API_KEY"]
@@ -32,8 +32,8 @@ def get_data_integrated():
     all_items = []
     
     try:
-        # 1000건 제한을 우회하기 위해 2페이지(2000건) 자동 연속 호출
-        for i in range(2):
+        # 식당 데이터에 밀리지 않도록 5페이지(5000건) 자동 연속 호출
+        for i in range(5):
             start = i * 1000 + 1
             end = (i + 1) * 1000
             url = f"http://openapi.foodsafetykorea.go.kr/api/{api_key}/{service_id}/json/{start}/{end}"
@@ -57,7 +57,6 @@ def get_data_origin():
     
     all_items = []
     try:
-        # 농산물 비중이 크므로, 유가공품을 더 많이 찾기 위해 3페이지(3000건) 자동 연속 호출
         for i in range(3):
             start = i * 1000 + 1
             end = (i + 1) * 1000
@@ -75,7 +74,7 @@ def get_data_origin():
     return all_items, None
 
 # 4. 데이터 수집 및 전처리
-with st.spinner("통합망(2,000건) 및 원산지(3,000건) 데이터를 딥서치 수집 중입니다..."):
+with st.spinner("통합망(5,000건) 및 원산지(3,000건) 데이터를 딥서치 수집 중입니다..."):
     items_integrated, err_integrated = get_data_integrated()
     items_origin, err_origin = get_data_origin()
 
@@ -99,8 +98,18 @@ for item in items_integrated:
         '출처': '식품안전나라(토탈)'
     })
 
-df_integrated = pd.DataFrame(integrated_list)
-if not df_integrated.empty:
+df_integrated_raw = pd.DataFrame(integrated_list)
+df_integrated = pd.DataFrame()
+
+if not df_integrated_raw.empty:
+    # 📌 팩트 로직: 불필요한 접객업(식당, 카페 등) 키워드 원천 차단 블랙리스트
+    exclude_keywords = ['카페', '치킨', '피자', '호프', '포차', '식당', '반점', '다방', '음식점', '제과점', '버거', '김밥', '떡볶이', '갈비', '국밥', '가든', '분식']
+    exclude_pattern = '|'.join(exclude_keywords)
+    
+    # 블랙리스트 단어가 업체명에 포함되지 않은(~) 데이터만 살림
+    df_integrated = df_integrated_raw[~df_integrated_raw['업체명'].str.contains(exclude_pattern, na=False, regex=True)].copy()
+    
+    # 중복 제거 후 무조건 가장 최신 날짜순으로 정렬
     df_integrated = df_integrated.drop_duplicates(subset=['업체명', '위반내용', '처분확정일'], keep='first')
     df_integrated = df_integrated.sort_values(by='처분확정일', ascending=False).reset_index(drop=True)
 
@@ -138,7 +147,7 @@ if err_origin:
 # 전체 현황판 출력
 st.markdown(f"""
 <div class="info-box">
-    <strong>💡 실시간 딥서치 수집 현황</strong>: 통합 행정처분망 <strong>{len(df_integrated)}건</strong> / 취급 품목 지정 원산지 통계 <strong>{len(df_origin)}건</strong> 연동 완료
+    <strong>💡 실시간 딥서치 수집 현황</strong>: 통합 행정처분망 <strong>{len(df_integrated)}건</strong> (접객업 필터링 완료) / 취급 품목 지정 원산지 통계 <strong>{len(df_origin)}건</strong> 연동 완료
 </div>
 """, unsafe_allow_html=True)
 
@@ -226,7 +235,7 @@ with tab2:
 # 탭 3: 월별 신규 등록 내역
 # ==========================================
 with tab3:
-    st.subheader("📅 월별 통합 행정처분 등록 리스트")
+    st.subheader("📅 월별 제조가공업 행정처분 리스트")
     
     available_months = set()
     for d in df_integrated['처분확정일']:
@@ -323,7 +332,7 @@ with tab5:
 
         st.markdown(f"""
         <div class="info-box">
-            <strong>{selected_stat_year}년도 행정처분 총 {len(df_stats_filtered)}건 집계 완료</strong>
+            <strong>{selected_stat_year}년도 행정처분 총 {len(df_stats_filtered)}건 집계 완료 (접객업 제외)</strong>
         </div>
         """, unsafe_allow_html=True)
         
@@ -333,7 +342,6 @@ with tab5:
             st.markdown("### 📅 연도별 행정처분 발생 추이")
             if selected_stat_year == "전체":
                 yearly_counts = df_stats_filtered.groupby('연도').size().reset_index(name='처분건수')
-                # 팩트 체크: 이 부분이 에러의 원인이었던 오타입니다. '연도'로 정확히 수정했습니다.
                 yearly_counts = yearly_counts.sort_values(by='연도')
                 chart_data_year = yearly_counts.set_index('연도')
                 st.bar_chart(chart_data_year, color="#e74c3c")
