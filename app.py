@@ -1,382 +1,125 @@
 import streamlit as st
-import requests
+import cv2
+import numpy as np
 import pandas as pd
-from datetime import datetime
-import dateutil.relativedelta
+import matplotlib.pyplot as plt
+from PIL import Image
 
-# 1. 기본 페이지 설정
-st.set_page_config(page_title="식품안전 및 원산지 통합 모니터링", layout="wide")
-
-# CSS 디자인
-st.markdown("""
-    <style>
-    .main { background-color: #f8f9fa; }
-    .penalty-card { border: 1px solid #ddd; padding: 15px; border-radius: 10px; background-color: white; margin-top: 20px; margin-bottom: 20px; border-left: 5px solid #e74c3c; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
-    .origin-card { border: 1px solid #ddd; padding: 15px; border-radius: 10px; background-color: white; margin-top: 20px; margin-bottom: 20px; border-left: 5px solid #27ae60; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
-    .info-box { background-color: #e9ecef; padding: 15px; border-radius: 8px; margin-bottom: 20px; font-size: 14px; }
-    .dairy-box { background-color: #e3f2fd; padding: 15px; border-radius: 8px; margin-bottom: 20px; font-size: 14px; border: 1px solid #90caf9;}
-    .guide-text { color: #2980b9; font-weight: bold; margin-bottom: 10px; }
-    </style>
-    """, unsafe_allow_html=True)
-
-st.title("🥛 일반식품·축산물 행정처분 및 원산지 통합 모니터링")
-
-# 2. 통합 행정처분 데이터 로드 (10,000건 최신 확보로 대폭 확장)
-def get_data_integrated():
-    try:
-        api_key = st.secrets["FOOD_SAFETY_API_KEY"]
-    except KeyError:
-        return [], "Secrets에 'FOOD_SAFETY_API_KEY'가 없습니다. 식품안전나라 키를 확인해 주십시오."
+def analyze_soybeans(image_bytes, pixels_per_5mm=50):
+    """
+    OpenCV를 사용하여 콩의 개수, 크기(mm), 색상, 모양을 분석하는 함수입니다.
+    pixels_per_5mm: 5mm 격자가 이미지 상에서 차지하는 픽셀 수 (초기 캘리브레이션 값)
+    """
+    # 1. 이미지 로드 및 전처리
+    nparr = np.frombuffer(image_bytes, np.uint8)
+    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     
-    service_id = "I0470"
-    all_items = []
+    # 가우시안 블러 및 이진화 (배경과 콩 분리)
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    _, thresh = cv2.threshold(blurred, 100, 255, cv2.THRESH_BINARY_INV)
     
-    try:
-        # 방대한 접객업 데이터에 밀리지 않도록 10페이지(10,000건) 자동 연속 호출
-        for i in range(10):
-            start = i * 1000 + 1
-            end = (i + 1) * 1000
-            url = f"http://openapi.foodsafetykorea.go.kr/api/{api_key}/{service_id}/json/{start}/{end}"
-            response = requests.get(url, timeout=20)
-            
-            if response.status_code == 200:
-                data = response.json()
-                if service_id in data and 'row' in data[service_id]:
-                    all_items.extend(data[service_id]['row'])
-    except Exception as e:
-        return all_items, f"통합망 API 통신 장애: {e}"
+    # 노이즈 제거 (모폴로지 연산)
+    kernel = np.ones((3,3), np.uint8)
+    opening = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=2)
+    
+    # 2. 외곽선(Contour) 추출
+    contours, _ = cv2.findContours(opening, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    mm_per_pixel = 5.0 / pixels_per_5mm
+    
+    total_count = 0
+    sizes_mm = []
+    off_color_count = 0
+    broken_count = 0
+    
+    # 3. 개별 콩 데이터 분석
+    for cnt in contours:
+        area = cv2.contourArea(cnt)
         
-    return all_items, None
-
-# 3. 농관원 원산지 적발현황 데이터 로드 (통계 데이터)
-def get_data_origin():
-    try:
-        api_key = st.secrets["MAFRA_API_KEY"]
-    except KeyError:
-        return [], "Secrets에 'MAFRA_API_KEY'가 등록되지 않았습니다."
-    
-    all_items = []
-    try:
-        for i in range(3):
-            start = i * 1000 + 1
-            end = (i + 1) * 1000
-            url = f"http://211.237.50.150:7080/openapi/{api_key}/json/Grid_20151027000000000243_1/{start}/{end}"
-            response = requests.get(url, timeout=15)
+        # 너무 작은 노이즈 픽셀은 콩으로 인식하지 않음
+        if area > 100:
+            total_count += 1
             
-            if response.status_code == 200:
-                data = response.json()
-                grid_key = 'Grid_20151027000000000243_1'
-                if grid_key in data and 'row' in data[grid_key]:
-                    all_items.extend(data[grid_key]['row'])
-    except Exception as e:
-        return all_items, f"원산지 API 통신 장애: {e}"
-        
-    return all_items, None
-
-# 4. 데이터 수집 및 전처리
-with st.spinner("통합망(10,000건) 및 원산지(3,000건) 데이터를 딥서치 수집 중입니다. (약 10~15초 소요)..."):
-    items_integrated, err_integrated = get_data_integrated()
-    items_origin, err_origin = get_data_origin()
-
-# 통합 행정처분 데이터 전처리
-integrated_list = []
-for item in items_integrated:
-    comp_name = item.get('BSSH_NM') or item.get('PRCSCITYPOINT_BSSHNM') or item.get('ENTP_NM') or item.get('CMPNY_NM') or '확인불가'
-    law_name = item.get('VIOLT_NM') or item.get('LAWORD_CD_NM') or '내용 없음'
-    viol_content = item.get('VIOLT_CN') or item.get('VILTCN') or '내용 없음'
-    disp_name = item.get('DISPOS_CN') or item.get('DISPOS_NM') or item.get('DSPSCN') or '내용 없음'
-    disp_date = str(item.get('DISPOS_DT') or item.get('DSPS_DCSNDT') or item.get('ADM_DISP_DT') or '내용 없음')
-    address = item.get('ADDR') or item.get('SITE_ADDR_RD') or '내용 없음'
-
-    integrated_list.append({
-        '업체명': comp_name,
-        '위반법령': law_name,
-        '위반내용': viol_content,
-        '행정처분명': disp_name,
-        '처분확정일': disp_date,
-        '소재지': address,
-        '출처': '식품안전나라(토탈)'
-    })
-
-df_integrated_raw = pd.DataFrame(integrated_list)
-df_integrated = pd.DataFrame()
-
-if not df_integrated_raw.empty:
-    # 📌 팩트 로직: 제조·가공업을 제외한 모든 서비스(접객/의료/유통/숙박/오락) 초강력 블랙리스트 적용
-    exclude_keywords = [
-        '카페', '치킨', '피자', '호프', '포차', '식당', '반점', '다방', '음식점', '제과점', 
-        '버거', '김밥', '떡볶이', '갈비', '국밥', '가든', '분식', '주점', '단란', '유흥', 
-        '판매', '마트', '유통', '상사', '슈퍼', '편의점', '백화점', '시네마', '상점', '할인마트',
-        '노래', '뮤직', '병원', '의원', '약국', '요양', '커피', '브루', '배떡', '가요방', 
-        '대리점', '보급소', '총판', '가맹점', '프랜차이즈', '학원', '어린이집', '유치원', '학교',
-        '급식', '뷔페', '출장', '웨딩', '예식', '장례', '호텔', '모텔', '여관', '리조트', 
-        '사우나', '목욕', 'PC', '피씨', '당구', '골프', '휴게소', '스마일', '푸드코트'
-    ]
-    exclude_pattern = '|'.join(exclude_keywords)
-    
-    # 블랙리스트 단어가 포함되지 않은 정통 제조 및 가공 공장 데이터만 생존
-    df_integrated = df_integrated_raw[
-        (~df_integrated_raw['업체명'].str.contains(exclude_pattern, na=False, regex=True)) &
-        (~df_integrated_raw['위반내용'].str.contains(exclude_pattern, na=False, regex=True))
-    ].copy()
-    
-    # 중복 제거 후 가장 최신 날짜순 정렬 보장
-    df_integrated = df_integrated.drop_duplicates(subset=['업체명', '위반내용', '처분확정일'], keep='first')
-    df_integrated = df_integrated.sort_values(by='처분확정일', ascending=False).reset_index(drop=True)
-
-# 원산지 통계 데이터 전처리 및 요청 품목 필터링
-origin_list = []
-for item in items_origin:
-    origin_list.append({
-        '처분년월': str(item.get('DSPS_YM', '내용 없음')),
-        '시도명': item.get('CTY_DO_NM', '내용 없음'),
-        '업무구분': item.get('JOB_SE_NM', '내용 없음'),
-        '위반품목': item.get('VIOLT_PRDLST', '내용 없음'),
-        '위반유형': item.get('VIOLT_TY', '내용 없음'),
-        '위반건수': int(item.get('VIOLT_CO', 0)) if str(item.get('VIOLT_CO', 0)).isdigit() else 0,
-        '위반물량': str(item.get('VIOLT_VOLM', '0'))
-    })
-df_origin_raw = pd.DataFrame(origin_list)
-
-df_origin = pd.DataFrame()
-if not df_origin_raw.empty:
-    target_keywords = ['우유', '두유', '음료', '환자', '가공유', '발효유', '원유', '유가공', '요거트', '치즈', '주스', '즙', '유제품', '분유', '유조리']
-    origin_pattern = '|'.join(target_keywords)
-    
-    df_origin_filtered = df_origin_raw[df_origin_raw['위반품목'].str.contains(origin_pattern, na=False, regex=True)].copy()
-    
-    if not df_origin_filtered.empty:
-        df_origin_filtered['연도'] = df_origin_filtered['처분년월'].str[:4]
-        df_origin = df_origin_filtered.sort_values(by='처분년월', ascending=False).reset_index(drop=True)
-
-# 에러 메시지 알림
-if err_integrated:
-    st.warning(f"통합 행정처분 연동 알림: {err_integrated}")
-if err_origin:
-    st.error(f"원산지 연동 알림: {err_origin}")
-
-# 전체 현황판 출력
-st.markdown(f"""
-<div class="info-box">
-    <strong>💡 실시간 딥서치 수집 현황</strong>: 통합 행정처분망 <strong>{len(df_integrated)}건</strong> (비제조업 완벽 차단) / 취급 품목 지정 원산지 통계 <strong>{len(df_origin)}건</strong> 연동 완료
-</div>
-""", unsafe_allow_html=True)
-
-# 5. 5개의 독립된 탭 구성
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "🔍 전체 업체 통합 검색", 
-    "🥛 유가공·유제품 동향", 
-    "📅 월별 신규 등록 내역", 
-    "🌾 원산지 위반 통계",
-    "📊 행정처분 통계 분석"
-])
-
-# ==========================================
-# 탭 1: 전체 업체 통합 검색
-# ==========================================
-with tab1:
-    st.subheader("🔍 특정 업체 행정처분 이력 검색")
-    search_keyword = st.text_input("검색할 업체명을 입력하세요", key="search_input")
-    
-    if search_keyword:
-        search_df = df_integrated[df_integrated['업체명'].str.contains(search_keyword, na=False)].reset_index(drop=True)
-        
-        if search_df.empty:
-            st.success(f"'{search_keyword}'(으)로 검색된 내역이 없습니다.")
-        else:
-            st.warning(f"총 {len(search_df)}건의 내역이 발견되었습니다.")
+            # 크기 계산 (mm) - 최소 외접원의 지름 사용
+            (x, y), radius = cv2.minEnclosingCircle(cnt)
+            diameter_mm = (radius * 2) * mm_per_pixel
+            sizes_mm.append(diameter_mm)
             
-            search_display = search_df[['업체명', '위반법령', '행정처분명', '처분확정일', '출처']].copy()
-            st.markdown('<p class="guide-text">👇 표에서 원하는 업체를 클릭하면 상세 정보가 나타납니다.</p>', unsafe_allow_html=True)
+            # 모양 계산 (원형도: 1에 가까울수록 원형)
+            perimeter = cv2.arcLength(cnt, True)
+            if perimeter == 0:
+                continue
+            circularity = 4 * np.pi * (area / (perimeter * perimeter))
             
-            event_search = st.dataframe(search_display, use_container_width=True, on_select="rerun", selection_mode="single-row")
+            if circularity < 0.75: # 기준치 이하면 깨진 콩(파쇄립)으로 간주
+                broken_count += 1
+                
+            # 색상 계산 (마스크 생성 후 평균 색상 추출)
+            mask = np.zeros(gray.shape, dtype=np.uint8)
+            cv2.drawContours(mask, [cnt], -1, 255, -1)
+            mean_val = cv2.mean(img_rgb, mask=mask)
             
-            if len(event_search.selection.rows) > 0:
-                detail = search_df.iloc[event_search.selection.rows[0]]
-                st.markdown(f"""
-                <div class="penalty-card">
-                    <h3>🏢 {detail['업체명']} <span style="font-size:12px; color:gray;">({detail['출처']})</span></h3>
-                    <p><strong>⚠️ 위반법령:</strong> {detail['위반법령']}</p>
-                    <p><strong>📝 위반내용:</strong> {detail['위반내용']}</p>
-                    <p><strong>⚖️ 행정처분명:</strong> {detail['행정처분명']}</p>
-                    <p><strong>📅 처분확정일:</strong> {detail['처분확정일']}</p>
-                    <p><strong>📍 소재지:</strong> {detail['소재지']}</p>
-                </div>
-                """, unsafe_allow_html=True)
+            # 검은콩 기준: R, G, B 채널 값이 비정상적으로 높으면(밝으면) 껍질이 벗겨진 것으로 간주
+            if mean_val[0] > 80 and mean_val[1] > 80: # 임계값은 환경에 따라 조절 필요
+                off_color_count += 1
 
-# ==========================================
-# 탭 2: 유가공·유제품 동향
-# ==========================================
-with tab2:
-    st.subheader("🥛 동종업계(유제품/유가공) 처분 동향")
-    dairy_keywords = ['유업', '우유', '치즈', '요거트', '목장', '유가공', '밀크', '다논', '푸르밀', '매일', '남양', '서울우유', '빙그레', '연세', '파스퇴르']
-    
-    st.markdown(f"""
-    <div class="dairy-box">
-        ✔️ <strong>적용된 필터링 키워드:</strong> {', '.join(dairy_keywords)}
-    </div>
-    """, unsafe_allow_html=True)
-
-    dairy_pattern = '|'.join(dairy_keywords)
-    dairy_df = df_integrated[df_integrated['업체명'].str.contains(dairy_pattern, na=False, regex=True)].reset_index(drop=True)
-
-    if dairy_df.empty:
-        st.info("현재 공표된 내역 중 유가공/유제품 관련 업체의 적발 건은 없습니다.")
+    # 4. 통계 산출
+    if total_count > 0:
+        avg_size = np.mean(sizes_mm)
+        min_size = np.min(sizes_mm)
+        max_size = np.max(sizes_mm)
+        off_color_ratio = (off_color_count / total_count) * 100
+        broken_ratio = (broken_count / total_count) * 100
     else:
-        st.error(f"동종업계 위반 내역 총 {len(dairy_df)}건이 조회되었습니다.")
-        dairy_display = dairy_df[['업체명', '위반법령', '행정처분명', '처분확정일', '출처']].copy()
-        st.markdown('<p class="guide-text">👇 표에서 원하는 업체를 클릭하면 상세 정보가 나타납니다.</p>', unsafe_allow_html=True)
-        
-        event_dairy = st.dataframe(dairy_display, use_container_width=True, on_select="rerun", selection_mode="single-row")
-        
-        if len(event_dairy.selection.rows) > 0:
-            detail = dairy_df.iloc[event_dairy.selection.rows[0]]
-            st.markdown(f"""
-            <div class="penalty-card">
-                <h3>🏢 {detail['업체명']} <span style="font-size:12px; color:gray;">({detail['출처']})</span></h3>
-                <p><strong>⚠️ 위반법령:</strong> {detail['위반법령']}</p>
-                <p><strong>📝 위반내용:</strong> {detail['위반내용']}</p>
-                <p><strong>⚖️ 행정처분명:</strong> {detail['행정처분명']}</p>
-                <p><strong>📅 처분확정일:</strong> {detail['처분확정일']}</p>
-                <p><strong>📍 소재지:</strong> {detail['소재지']}</p>
-            </div>
-            """, unsafe_allow_html=True)
+        avg_size = min_size = max_size = off_color_ratio = broken_ratio = 0.0
 
-# ==========================================
-# 탭 3: 월별 신규 등록 내역
-# ==========================================
-with tab3:
-    st.subheader("📅 월별 제조·가공업 행정처분 리스트")
-    
-    available_months = set()
-    for d in df_integrated['처분확정일']:
-        date_val = str(d).replace('-', '')
-        if len(date_val) >= 6 and date_val.isdigit():
-            available_months.add(f"{date_val[:4]}.{date_val[4:6]}")
-            
-    month_list = sorted(list(available_months), reverse=True)
-    
-    if month_list:
-        selected_month = st.selectbox("조회할 처분 월을 선택하세요", month_list)
-        selected_year_month = selected_month.replace(".", "")
-        
-        month_df = df_integrated[df_integrated['처분확정일'].str.replace('-', '').str.startswith(selected_year_month, na=False)].reset_index(drop=True)
-        
-        if not month_df.empty:
-            month_display = month_df[['업체명', '위반법령', '행정처분명', '처분확정일', '출처']].copy()
-            st.markdown('<p class="guide-text">👇 표에서 원하는 업체를 클릭하면 상세 정보가 나타납니다.</p>', unsafe_allow_html=True)
-            
-            event_month = st.dataframe(month_display, use_container_width=True, on_select="rerun", selection_mode="single-row")
-            
-            if len(event_month.selection.rows) > 0:
-                detail = month_df.iloc[event_month.selection.rows[0]]
-                st.markdown(f"""
-                <div class="penalty-card">
-                    <h3>🏢 {detail['업체명']} <span style="font-size:12px; color:gray;">({detail['출처']})</span></h3>
-                    <p><strong>⚠️ 위반법령:</strong> {detail['위반법령']}</p>
-                    <p><strong>📝 위반내용:</strong> {detail['위반내용']}</p>
-                    <p><strong>⚖️ 행정처분명:</strong> {detail['행정처분명']}</p>
-                    <p><strong>📅 처분확정일:</strong> {detail['처분확정일']}</p>
-                    <p><strong>📍 소재지:</strong> {detail['소재지']}</p>
-                </div>
-                """, unsafe_allow_html=True)
-    else:
-        st.info("표시할 수 있는 월별 데이터가 없습니다.")
+    return {
+        "total_count": total_count,
+        "sizes_mm": sizes_mm,
+        "avg_size": avg_size,
+        "min_size": min_size,
+        "max_size": max_size,
+        "off_color_ratio": off_color_ratio,
+        "broken_count": broken_count
+    }
 
-# ==========================================
-# 탭 4: 원산지 위반 통계
-# ==========================================
-with tab4:
-    st.subheader("🌾 지정 품목 원산지 표시 적발 현황")
-    
-    if df_origin.empty:
-        st.info("해당 취급 품목군에 대입되는 원산지 위반 통계 데이터가 없습니다.")
-    else:
-        unique_years = sorted(list(df_origin['연도'].unique()), reverse=True)
-        selected_year = st.selectbox("조회할 원산지 적발 연도를 선택하세요", unique_years, key="origin_year_select")
-        
-        yearly_origin_df = df_origin[df_origin['연도'] == selected_year].reset_index(drop=True)
-        
-        st.markdown(f"""
-        <div class="dairy-box">
-            🎯 <strong>{selected_year}년도 취급 품목 모니터링 범위:</strong> 우유, 두유, 음료, 환자식, 가공유 관련 적발 총 <strong>{len(yearly_origin_df)}건</strong> 조회됨
-        </div>
-        """, unsafe_allow_html=True)
-        
-        st.markdown('<p class="guide-text">👇 내역을 클릭하면 하단에 상세 누적 적발 건수와 물량이 표시됩니다.</p>', unsafe_allow_html=True)
-        
-        origin_display = yearly_origin_df[['처분년월', '시도명', '위반품목', '위반유형', '위반건수']].copy()
-        event_origin = st.dataframe(origin_display, use_container_width=True, on_select="rerun", selection_mode="single-row")
-        
-        if len(event_origin.selection.rows) > 0:
-            detail = yearly_origin_df.iloc[event_origin.selection.rows[0]]
-            st.markdown(f"""
-            <div class="origin-card">
-                <h3>📍 {detail['시도명']} 지역 세부 데이터 <span style="font-size:12px; color:gray;">(적발년월: {detail['처분년월']})</span></h3>
-                <p><strong>🔍 업무구분:</strong> {detail['업무구분']}</p>
-                <p><strong>⚠️ 위반품목:</strong> {detail['위반품목']}</p>
-                <p><strong>❌ 위반유형:</strong> {detail['위반유형']}</p>
-                <p><strong>📊 해당 월 적발건수:</strong> {detail['위반건수']} 건</p>
-                <p><strong>📦 해당 월 적발물량:</strong> {detail['위반물량']}</p>
-            </div>
-            """, unsafe_allow_html=True)
+# 5. Streamlit 웹 인터페이스 구성
+st.set_page_config(page_title="대두(콩) 특등 자동 분석기", layout="wide")
+st.title("대두 비전 검사 대시보드")
 
-# ==========================================
-# 탭 5: 행정처분 통계 분석
-# ==========================================
-with tab5:
-    st.subheader("📊 통합 행정처분 통계 현황 및 원인 분석")
-    
-    if df_integrated.empty:
-        st.info("통계를 생성할 행정처분 기본 데이터가 존재하지 않습니다.")
-    else:
-        df_stats = df_integrated.copy()
-        df_stats['연도'] = df_stats['처분확정일'].str.replace('-', '').str[:4]
-        
-        unique_years_stat = sorted(list(df_stats['연도'].unique()), reverse=True)
-        selected_stat_year = st.selectbox("📊 조회할 기준 연도를 선택하세요", ["전체"] + unique_years_stat)
-        
-        if selected_stat_year != "전체":
-            df_stats_filtered = df_stats[df_stats['연도'] == selected_stat_year].reset_index(drop=True)
-        else:
-            df_stats_filtered = df_stats.copy()
+uploaded_file = st.file_uploader("5mm 격자 콩 이미지를 업로드하세요", type=["jpg", "png", "jpeg"])
 
-        st.markdown(f"""
-        <div class="info-box">
-            <strong>{selected_stat_year}년도 행정처분 총 {len(df_stats_filtered)}건 집계 완료 (제조·가공업 전용)</strong>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.markdown("### 📅 연도별 행정처분 발생 추이")
-            if selected_stat_year == "전체":
-                yearly_counts = df_stats_filtered.groupby('연도').size().reset_index(name='처분건수')
-                yearly_counts = yearly_counts.sort_values(by='연도')
-                chart_data_year = yearly_counts.set_index('연도')
-                st.bar_chart(chart_data_year, color="#e74c3c")
-            else:
-                st.info(f"{selected_stat_year}년 단일 연도가 선택되어 추이 그래프가 생략되었습니다. '전체'를 선택하면 추이를 볼 수 있습니다.")
+if uploaded_file is not None:
+    st.image(uploaded_file, caption="업로드된 원본 이미지", width=500)
+    
+    if st.button("분석 실행"):
+        with st.spinner("이미지를 분석하고 있습니다..."):
+            image_bytes = uploaded_file.getvalue()
+            results = analyze_soybeans(image_bytes, pixels_per_5mm=65) # 65는 예시 캘리브레이션 픽셀
             
-        with col2:
-            st.markdown("### ⚖️ 가장 많이 발생하는 위반 법령 TOP 10")
-            law_counts = df_stats_filtered.groupby('위반법령').size().reset_index(name='적발건수')
-            law_counts = law_counts.sort_values(by='적발건수', ascending=False).head(10).reset_index(drop=True)
-            chart_data_law = law_counts.set_index('위반법령')
-            st.bar_chart(chart_data_law, color="#2980b9")
+            st.subheader("📊 검사 결과 요약")
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric(label="1. 총 개수", value=f"{results['total_count']} 개")
+            col2.metric(label="2. 평균 크기", value=f"{results['avg_size']:.2f} mm")
+            col3.metric(label="3. 색상 불량률", value=f"{results['off_color_ratio']:.1f} %")
+            col4.metric(label="4. 깨진 콩 개수", value=f"{results['broken_count']} 개")
             
-        st.markdown("---")
-        st.markdown("### 🔍 위반법령별 구체적 적발 사유 (심층 분석)")
-        st.markdown('<p class="guide-text">👇 아래 표에서 특정 위반법령을 클릭하면, 해당 법령으로 적발된 실제 위반 내용과 사유를 상세하게 파악할 수 있습니다.</p>', unsafe_allow_html=True)
-        
-        event_law = st.dataframe(law_counts, use_container_width=True, on_select="rerun", selection_mode="single-row")
-        
-        if len(event_law.selection.rows) > 0:
-            selected_law = law_counts.iloc[event_law.selection.rows[0]]['위반법령']
-            st.markdown(f"#### 🚨 '{selected_law}' 실제 위반 상세 사례")
+            st.subheader("📏 크기 상세 정보")
+            col5, col6 = st.columns(2)
+            col5.metric(label="2-1. 최소 크기", value=f"{results['min_size']:.2f} mm")
+            col6.metric(label="2-2. 최대 크기", value=f"{results['max_size']:.2f} mm")
             
-            detail_df = df_stats_filtered[df_stats_filtered['위반법령'] == selected_law][['업체명', '위반내용', '행정처분명', '처분확정일']].reset_index(drop=True)
-            st.dataframe(detail_df, use_container_width=True, hide_index=True)
-        else:
-            st.info("👆 위 표에서 현장 점검의 기준을 세우고 싶은 위반법령 항목을 클릭해 보세요.")
+            # 2-3. 사이즈 분포 그래프 그리기 (Matplotlib)
+            st.subheader("📈 2-3. 크기 분포 그래프")
+            if results['total_count'] > 0:
+                fig, ax = plt.subplots(figsize=(8, 4))
+                ax.hist(results['sizes_mm'], bins=10, color='skyblue', edgecolor='black')
+                ax.axvline(results['avg_size'], color='red', linestyle='dashed', linewidth=2, label=f'Average: {results["avg_size"]:.2f}mm')
+                ax.axvline(7.1, color='green', linestyle='dashed', linewidth=2, label='Target (7.1mm)')
+                ax.set_title("Soybean Size Distribution")
+                ax.set_xlabel("Size (mm)")
+                ax.set_ylabel("Frequency (Count)")
+                ax.legend()
+                st.pyplot(fig)
