@@ -1,4 +1,7 @@
 streamlit
-requests
+opencv-python-headless
+numpy
 pandas
-python-dateutil
+matplotlib
+google-generativeai
+Pillow
