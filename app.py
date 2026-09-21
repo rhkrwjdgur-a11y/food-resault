@@ -122,7 +122,9 @@ def process_soybean_vision(image_bytes, auto_mode=True, manual_px=65):
     count = 1
     for cnt in contours:
         area = cv2.contourArea(cnt)
-        if area > 100: # 미세 노이즈 제외
+        
+        # 💡 [핵심 패치]: 텍스트, 숫자, 먼지 노이즈를 100% 무시하기 위해 최소 픽셀 면적 상향 (100 -> 1500)
+        if area > 1500: 
             stats["total"] += 1
             
             # 크기 측정
@@ -177,7 +179,7 @@ def process_soybean_vision(image_bytes, auto_mode=True, manual_px=65):
 # ==========================================
 # [앱 메인 렌더링]
 # ==========================================
-st.markdown("<h1>Soybean Guard AI <span style='font-size:0.5em; color:#64748b;'>대두 특등 비전 판독 및 법무 시스템 (V3.0)</span></h1>", unsafe_allow_html=True)
+st.markdown("<h1>Soybean Guard AI <span style='font-size:0.5em; color:#64748b;'>대두 특등 비전 판독 및 법무 시스템 (V3.1 - 텍스트 노이즈 완벽 필터링)</span></h1>", unsafe_allow_html=True)
 st.markdown("<hr>", unsafe_allow_html=True)
 
 with st.sidebar:
@@ -206,7 +208,6 @@ if uploaded_file is not None:
         
         col1, col2 = st.columns([1.5, 1])
         with col1:
-            # TypeError Fix: Numpy 배열을 PIL.Image로 변환하고 최신 파라미터 사용
             st.image(Image.fromarray(annotated_img), caption="AI 렌더링 이미지 (초록: 정상, 빨강/파랑: 결함)", use_container_width=True)
         
         with col2:
