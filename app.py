@@ -70,7 +70,7 @@ def auto_calibrate_grid(gray_img):
         if len(peaks) < 2:
             return None
         diffs = np.diff(peaks)
-        valid_diffs = diffs[diffs > 20] # 선 두께 노이즈 제거 (최소 20픽셀 이상)
+        valid_diffs = diffs[diffs > 20]
         if len(valid_diffs) == 0:
             return None
         return int(np.median(valid_diffs))
@@ -84,7 +84,7 @@ def auto_calibrate_grid(gray_img):
     return None
 
 # ==========================================
-# [OpenCV 엔진 2: 픽셀 수학 연산 및 번호 렌더링]
+# [OpenCV 엔진 2: 픽셀 수학 연산 및 번호 렌더링 (Watershed 분할 적용)]
 # ==========================================
 @st.cache_data(show_spinner=False)
 def process_soybean_vision(image_bytes, auto_mode=True, manual_px=65):
@@ -111,7 +111,24 @@ def process_soybean_vision(image_bytes, auto_mode=True, manual_px=65):
     kernel = np.ones((3,3), np.uint8)
     opening = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=2)
     
-    contours, _ = cv2.findContours(opening, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # 💡 [핵심 패치]: Watershed 알고리즘을 통한 밀집 객체 강제 분할
+    sure_bg = cv2.dilate(opening, kernel, iterations=3) # 확실한 배경 영역
+    dist_transform = cv2.distanceTransform(opening, cv2.DIST_L2, 5) # 거리 변환 (중심점 찾기)
+    ret, sure_fg = cv2.threshold(dist_transform, 0.4 * dist_transform.max(), 255, 0) # 확실한 전경(콩의 중심) 영역
+    
+    sure_fg = np.uint8(sure_fg)
+    unknown = cv2.subtract(sure_bg, sure_fg) # 경계가 모호한 영역
+    
+    ret, markers = cv2.connectedComponents(sure_fg)
+    markers = markers + 1 # 배경을 0이 아닌 1로 설정
+    markers[unknown == 255] = 0 # 모호한 영역을 0으로 마킹
+    
+    markers = cv2.watershed(img, markers) # 워터쉐드 경계선 긋기
+    
+    # 워터쉐드로 분리된 마스크를 기반으로 새로운 윤곽선 추출
+    separated_mask = np.zeros_like(gray)
+    separated_mask[markers > 1] = 255
+    contours, _ = cv2.findContours(separated_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
     mm_per_pixel = 5.0 / pixels_per_5mm
     stats = {
@@ -123,8 +140,8 @@ def process_soybean_vision(image_bytes, auto_mode=True, manual_px=65):
     for cnt in contours:
         area = cv2.contourArea(cnt)
         
-        # 💡 [핵심 패치]: 텍스트, 숫자, 먼지 노이즈를 100% 무시하기 위해 최소 픽셀 면적 상향 (100 -> 1500)
-        if area > 1500: 
+        # 텍스트 노이즈 무시 (워터쉐드로 잘린 조각을 고려해 임계값을 1000으로 조정)
+        if area > 1000: 
             stats["total"] += 1
             
             # 크기 측정
@@ -179,7 +196,7 @@ def process_soybean_vision(image_bytes, auto_mode=True, manual_px=65):
 # ==========================================
 # [앱 메인 렌더링]
 # ==========================================
-st.markdown("<h1>Soybean Guard AI <span style='font-size:0.5em; color:#64748b;'>대두 특등 비전 판독 및 법무 시스템 (V3.1 - 텍스트 노이즈 완벽 필터링)</span></h1>", unsafe_allow_html=True)
+st.markdown("<h1>Soybean Guard AI <span style='font-size:0.5em; color:#64748b;'>대두 특등 비전 판독 및 법무 시스템 (V4.0 - Watershed 밀집 분할)</span></h1>", unsafe_allow_html=True)
 st.markdown("<hr>", unsafe_allow_html=True)
 
 with st.sidebar:
@@ -240,25 +257,52 @@ if uploaded_file is not None:
                     - 파쇄립(깨진 콩) 혼입률: {stats['broken_ratio']}%
                     
                     [국가 농산물 표준규격(콩) 특등 합격 커트라인]
-                    - 낟알의 굵기(대립종): 7.10mm 체 잔량 비율 80% 이상
-                    - 타색립/이종피색립: 0.0% 이하 (절대 혼입 불가)
-                    - 파쇄립/피해립 총합: 5.0% 이하
+                    - 정상립: 95.0% 이상
+                    - 낟알의 고르기(대립종): 7.10mm 체 잔량 비율 80.0% 이상
+                    - 타색립/이종곡립: 0.0% 미만 (혼입불가)
+                    - 결점립 (파쇄립/피해립/이물 등 총합): 5.0% 미만
                     </pre_calc>
                     
-                    당신은 대한민국 최고 수준의 농산물 품질관리 수석 검사관입니다. 
-                    위 사전 연산에 입력된 [OpenCV 실측 수치]와 [표준규격 합격 커트라인]을 1:1로 엄격하게 대조하여 아래 마크다운 표 양식으로 공식 품질 검사 성적서를 출력하십시오. (자유 서술형 문장 절대 금지, 뼈대 유지)
+                    당신은 연세유업 아산공장 식품안전팀 소속 품질관리 AI 시스템입니다. 
+                    위 사전 연산에 입력된 [OpenCV 실측 수치]와 [표준규격 합격 커트라인]을 대조하여 아래 HTML 및 마크다운 양식으로 공식 품질 증명서를 출력하십시오. 
+                    정상립 실측치는 100%에서 타색립과 결점립 비율을 뺀 값으로 계산하십시오.
+                    절대 임의로 양식을 변경하거나 서술형 문장을 추가하지 말고, 아래 뼈대를 100% 그대로 유지하여 수치와 판정만 정확히 채워 넣으십시오.
 
-                    ### [대두(콩) 특등급 비전 검사 성적서]
-                    | 검사 항목 | 특등 법정 커트라인 | 시스템 실측 수치 | 상세 판정 사유 | 최종 판정 (✅ 합격 / 🚨 불합격 / ⚠️ 공정 조정 요망) |
-                    |---|---|---|---|---|
-                    | **굵기 (7.1mm 이상 대립종)** | 80.0% 이상 | {stats['premium_size_ratio']}% | (수치 비교하여 사유 명시) | |
-                    | **타색립 혼입 여부** | 0.0% (혼입불가) | {stats['off_color_ratio']}% | (수치 비교하여 사유 명시) | |
-                    | **결점립 (파쇄/피해)** | 5.0% 이하 | {stats['broken_ratio']}% | (수치 비교하여 사유 명시) | |
-                    
+                    <div style="text-align: center; margin-bottom: 30px;">
+                      <h2 style="font-weight: bold;">국산 콩 특등급 품질 증명서</h2>
+                    </div>
+
+                    ▣ **품 목** : 국산 콩 (생산 라인 투입분)<br>
+                    ▣ **작성일자** : 2026년 9월 21일
+                    <br><br>
+
+                    당사에서는 아래의 내용으로 농산물 검사기준에 따른 농산물 등급의 특등급 기준 이상으로 구분관리 및 선별 정선 가공하였음을 증명합니다.
+                    <br><br>
+
+                    | 구분 | AI 비전 실측치 | 국산 콩 표준 규격 (특등급) | 최종 판정 |
+                    |:---|:---:|:---:|:---:|
+                    | **정상립** | (계산값)% | 95% 이상 | |
+                    | **낟알의 고르기 (7.1mm 이상)** | {stats['premium_size_ratio']}% | 80% 이상 | |
+                    | **타색립 및 이종곡립** | {stats['off_color_ratio']}% | 0.0% 미만 (혼입불가) | |
+                    | **결점립 (파쇄/피해립 등)** | {stats['broken_ratio']}% | 5.0% 미만 | |
+
                     <br>
                     
-                    #### 💡 [수석 검사관의 공정 개선 권고사항]
-                    (실측 데이터를 바탕으로, 에어 젝터를 어떻게 조정해야 특등 수율을 높일 수 있을지 현장 실무자에게 2~3줄의 핵심 조언을 볼드체 섞어 작성하십시오.)
+                    <div style="display: flex; justify-content: flex-end;">
+                      <table border="1" style="border-collapse: collapse; text-align: center; width: 350px;">
+                        <tr>
+                          <td rowspan="2" style="background-color: #f1f5f9; font-weight: bold; width: 16%;">결<br>재</td>
+                          <td style="background-color: #f1f5f9; font-weight: bold; width: 28%;">검사자</td>
+                          <td style="background-color: #f1f5f9; font-weight: bold; width: 28%;">팀장</td>
+                          <td style="background-color: #f1f5f9; font-weight: bold; width: 28%;">부문장</td>
+                        </tr>
+                        <tr>
+                          <td style="height: 70px; vertical-align: bottom; padding: 5px;">(인)</td>
+                          <td style="height: 70px; vertical-align: bottom; padding: 5px;">(인)</td>
+                          <td style="height: 70px; vertical-align: bottom; padding: 5px;">(인)</td>
+                        </tr>
+                      </table>
+                    </div>
                     """
                     
                     response = model.generate_content(qc_prompt)
