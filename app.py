@@ -21,7 +21,7 @@ SHEET_ID = st.secrets["GOOGLE_SHEET_ID"]
 FOLDER_ID = st.secrets["DRIVE_FOLDER_ID"]
 
 genai.configure(api_key=GEMINI_API_KEY)
-MODEL_NAME = "gemini-1.5-flash" # 빠르고 비전 처리에 능한 플래시 모델
+MODEL_NAME = "gemini-3.6-flash" # 빠르고 비전 처리에 능한 플래시 모델
 
 def get_google_creds():
     scopes = ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
