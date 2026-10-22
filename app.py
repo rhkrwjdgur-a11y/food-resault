@@ -298,7 +298,7 @@ with tab2:
 # ----------------------------------------------------
 with tab3:
     st.markdown("### 🚨 신규/잠복 알레르기 전수조사 및 완제품(BOM) 역추적")
-    st.caption("공식 '알러지유발물질' 란에 기재되지 않았더라도, 숨어있는 타겟 물질(예: 참깨, 아몬드 등)을 샅샅이 찾아내어 **해당 원료가 사용된 '모든 완제품 리스트'를 다계층(선물세트 등)까지 즉시 추적**합니다.")
+    st.caption("공식 '알러지유발물질' 란에 기재되지 않았더라도, 숨어있는 타겟 물질을 샅샅이 찾아내어 **해당 원료가 사용된 '모든 완제품 리스트'를 다계층(무한 추적)으로 즉시 도출**합니다.")
     
     df_track = load_sheet_data()
     bom_df = load_bom_data()
@@ -331,44 +331,54 @@ with tab3:
                 
                 st.markdown("---")
                 
-                # 💡 ERP 다단계(다계층) BOM 완벽 대응 로직
+                # 💡 ERP 무한 다단계(다계층) BOM 자동 추적 로직 적용
                 if not bom_df.empty:
-                    st.markdown(f"#### 🏭 '{target_allergen}' 성분이 유입될 위험이 있는 완제품 리스트 (다계층 추적)")
+                    st.markdown(f"#### 🏭 '{target_allergen}' 성분이 유입될 위험이 있는 완제품 리스트 (다계층 무한 추적)")
                     
                     flagged_codes = tracked_df['코드'].astype(str).tolist()
                     affected_products_list = []
                     
-                    # Code2에서 1차 검색 (일반 제품)
-                    if 'Code2' in bom_df.columns:
-                        level1_matches = bom_df[bom_df['Code2'].astype(str).isin(flagged_codes)]
-                        for _, row in level1_matches.iterrows():
-                            affected_products_list.append({
-                                '완제품코드 (Code1)': str(row.get('Code1', '')),
-                                '완제품명 (Name1)': str(row.get('Name1', '')),
-                                '적발된 원자재코드': str(row.get('Code2', '')),
-                                '원자재명': str(row.get('Name2', '')),
-                                'BOM 계층': '1단계 (일반제품)'
-                            })
+                    # Code2, Code3, Code4 등 모든 하위 계층(Code로 시작하는 컬럼)을 동적으로 싹 다 스캔
+                    code_cols = [c for c in bom_df.columns if str(c).startswith('Code') and c != 'Code1']
+                    
+                    # 만약 한글로 '원자재코드'를 쓰는 상황을 대비한 폴백
+                    if not code_cols and '원자재코드' in bom_df.columns:
+                        code_cols = ['원자재코드']
+                    
+                    for code_col in code_cols:
+                        matches = bom_df[bom_df[code_col].astype(str).isin(flagged_codes)]
+                        
+                        # 쌍이 되는 Name 컬럼 동적 찾기 (Code2 -> Name2)
+                        name_col = code_col.replace('Code', 'Name')
+                        if name_col not in bom_df.columns:
+                            name_col = '원자재명' if '원자재명' in bom_df.columns else code_col
+                        
+                        for _, row in matches.iterrows():
+                            prod_code = str(row.get('Code1', row.get('완제품코드', '')))
+                            prod_name = str(row.get('Name1', row.get('완제품명', '')))
                             
-                    # Code3에서 2차 검색 (선물세트 등)
-                    if 'Code3' in bom_df.columns:
-                        level2_matches = bom_df[bom_df['Code3'].astype(str).isin(flagged_codes)]
-                        for _, row in level2_matches.iterrows():
+                            # 몇 단계에서 적발되었는지 파악
+                            level_str = "다단계"
+                            match_level = re.search(r'\d+', code_col)
+                            if match_level:
+                                level = int(match_level.group()) - 1
+                                level_str = f"{level}단계 하위"
+                                
                             affected_products_list.append({
-                                '완제품코드 (Code1)': str(row.get('Code1', '')),
-                                '완제품명 (Name1)': str(row.get('Name1', '')),
-                                '적발된 원자재코드': str(row.get('Code3', '')),
-                                '원자재명': str(row.get('Name3', '')),
-                                'BOM 계층': '2단계 (선물/수출 박스)'
+                                '완제품코드': prod_code,
+                                '완제품명': prod_name,
+                                '적발된 원료코드': str(row.get(code_col, '')),
+                                '적발된 원료명': str(row.get(name_col, '')),
+                                'BOM 투입 계층': level_str
                             })
                     
                     if not affected_products_list:
-                        st.success("✅ 위에서 적발된 원료가 현재 배합비(BOM) DB에 등록된 어떠한 완제품(일반/선물/수출용)에도 사용되지 않고 있습니다.")
+                        st.success("✅ 위에서 적발된 원료가 현재 배합비(BOM) DB에 등록된 어떠한 완제품에도 사용되지 않고 있습니다.")
                     else:
                         affected_df = pd.DataFrame(affected_products_list).drop_duplicates()
-                        unique_products_count = len(affected_df['완제품코드 (Code1)'].unique())
+                        unique_products_count = len(affected_df['완제품코드'].unique())
                         
-                        st.warning(f"⚠️ 총 {unique_products_count}종의 완제품(선물세트 포함)에 해당 원료가 투입되고 있습니다! 즉각적인 패키지 갱신 검토가 필요합니다.")
+                        st.warning(f"⚠️ 총 {unique_products_count}종의 완제품에 해당 원료가 직/간접 투입되고 있습니다! 즉각적인 패키지 갱신 검토가 필요합니다.")
                         st.dataframe(affected_df, use_container_width=True, hide_index=True)
                 else:
                     st.info("💡 구글 스프레드시트에 '배합비 DB' 시트를 추가하고 BOM 데이터를 등록하시면 다계층 역추적 기능이 활성화됩니다.")
