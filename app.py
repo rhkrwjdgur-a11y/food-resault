@@ -27,7 +27,6 @@ except KeyError as e:
 genai.configure(api_key=GEMINI_API_KEY)
 MODEL_NAME = "gemini-3.6-flash"
 
-# 💡 수정된 부분: 서비스 계정이 아닌 사용자 Refresh Token 인증 방식 적용
 def get_google_creds():
     try:
         creds = Credentials(
@@ -45,12 +44,13 @@ def get_google_creds():
 # ==========================================
 # 2. 구글 드라이브 & 시트 통신 함수
 # ==========================================
-def upload_image_to_drive(image_bytes, file_name):
+# 💡 수정: PDF 등 다양한 파일 형식을 지원하도록 mime_type 변수 추가
+def upload_file_to_drive(file_bytes, file_name, mime_type):
     try:
         creds = get_google_creds()
         service = build('drive', 'v3', credentials=creds)
         file_metadata = {'name': file_name, 'parents': [FOLDER_ID]}
-        media = MediaIoBaseUpload(io.BytesIO(image_bytes), mimetype='image/jpeg', resumable=True)
+        media = MediaIoBaseUpload(io.BytesIO(file_bytes), mimetype=mime_type, resumable=True)
         uploaded_file = service.files().create(
             body=file_metadata, 
             media_body=media, 
@@ -86,11 +86,12 @@ def load_sheet_data():
 # ==========================================
 # 3. Gemini Vision API 데이터 파싱
 # ==========================================
-def extract_label_data(image):
+# 💡 수정: PDF 및 이미지 바이너리 데이터를 직접 받아 처리하도록 변경
+def extract_label_data(file_bytes, mime_type):
     prompt = """
     당신은 원부자재 한글표시사항(라벨) 데이터 추출 전문가입니다.
-    첨부된 이미지를 정밀하게 분석하여 아래 항목들을 추출하고, **반드시 순수한 JSON 형식으로만** 반환하십시오.
-    코드 번호나 특정 항목이 이미지에 안 보이면 빈 문자열("")로 두십시오.
+    첨부된 문서(PDF 또는 이미지)를 정밀하게 분석하여 아래 항목들을 추출하고, **반드시 순수한 JSON 형식으로만** 반환하십시오.
+    코드 번호나 특정 항목이 안 보이면 빈 문자열("")로 두십시오.
     마크다운 기호(```json 등)는 절대 포함하지 마십시오.
 
     {
@@ -106,13 +107,20 @@ def extract_label_data(image):
     """
     try:
         model = genai.GenerativeModel(MODEL_NAME)
-        response = model.generate_content([prompt, image])
+        
+        # 바이너리 데이터와 MIME 타입을 AI 모델 규격에 맞춰 결합
+        file_part = {
+            "mime_type": mime_type,
+            "data": file_bytes
+        }
+        
+        response = model.generate_content([prompt, file_part])
         
         clean_json_str = re.sub(r'```json\n|\n```|```', '', response.text).strip()
         parsed_data = json.loads(clean_json_str)
         return parsed_data, None
     except json.JSONDecodeError:
-        return None, "JSON 파싱 에러: 이미지 인식이 불완전합니다. 라벨 사진을 더 선명하게 다시 찍어주세요."
+        return None, "JSON 파싱 에러: 파일 인식이 불완전합니다. 문서가 암호화되어 있거나 너무 흐린지 확인해주세요."
     except Exception as e:
         return None, f"AI 분석 에러: {e}"
 
@@ -121,25 +129,36 @@ def extract_label_data(image):
 # ==========================================
 st.title("원자재 표시사항 라벨 통합 관리 시스템")
 
-tab1, tab2 = st.tabs(["📸 한글라벨 스캔 및 DB 저장", "🔍 원자재 DB 검색 대시보드"])
+tab1, tab2 = st.tabs(["📸 라벨 스캔 및 DB 저장 (PDF 지원)", "🔍 원자재 DB 검색 대시보드"])
 
 # [탭 1] 한글라벨 스캔 및 저장
 with tab1:
     st.markdown("### 신규 원자재 라벨 업로드")
-    uploaded_file = st.file_uploader("한글표시사항 라벨 사진을 업로드하세요 (JPG, PNG)", type=['jpg', 'jpeg', 'png'])
+    # 💡 수정: 확장자에 'pdf' 추가
+    uploaded_file = st.file_uploader("한글표시사항 라벨 사진 또는 PDF를 업로드하세요 (JPG, PNG, PDF)", type=['jpg', 'jpeg', 'png', 'pdf'])
 
     if uploaded_file is not None:
-        image = Image.open(uploaded_file)
-        st.image(image, caption='업로드된 라벨 이미지', width=400)
+        file_bytes = uploaded_file.getvalue()
+        file_mime_type = uploaded_file.type
         
-        manual_code = st.text_input("📦 원자재 코드 번호를 입력하세요 (예: 10356):", help="라벨 사진에 코드가 없는 경우 직접 입력해야 DB에 반영됩니다.")
+        # 💡 수정: 파일 형식에 따라 미리보기 방식 및 확장자 분리
+        if "pdf" in file_mime_type.lower():
+            st.info(f"📄 PDF 파일이 정상적으로 업로드되었습니다: `{uploaded_file.name}`")
+            ext = ".pdf"
+        else:
+            image = Image.open(io.BytesIO(file_bytes))
+            st.image(image, caption='업로드된 라벨 이미지', width=400)
+            ext = ".jpg"
         
-        if st.button("이미지 분석 및 스프레드시트 저장", type="primary"):
+        manual_code = st.text_input("📦 원자재 코드 번호를 입력하세요 (예: 10356):", help="사진/문서에 코드가 없는 경우 직접 입력해야 DB에 반영됩니다.")
+        
+        if st.button("파일 분석 및 스프레드시트 저장", type="primary"):
             if not manual_code:
                 st.warning("⚠️ 원자재 코드 번호를 먼저 입력해 주세요!")
             else:
-                with st.spinner("AI가 라벨을 판독 중입니다..."):
-                    parsed_data, error = extract_label_data(image)
+                with st.spinner("AI가 파일을 판독 중입니다..."):
+                    # 💡 수정: 파일 바이너리와 MIME 타입을 AI에 넘김
+                    parsed_data, error = extract_label_data(file_bytes, file_mime_type)
                     
                     if error:
                         st.error(error)
@@ -148,10 +167,10 @@ with tab1:
                         st.json(parsed_data)
                         
                         current_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                        file_name = f"원자재라벨_{parsed_data.get('원재료의 제품명', '미상')}_{current_time}.jpg"
-                        image_bytes = uploaded_file.getvalue()
+                        file_name = f"원자재라벨_{parsed_data.get('원재료의 제품명', '미상')}_{current_time}{ext}"
                         
-                        drive_link = upload_image_to_drive(image_bytes, file_name)
+                        # 💡 수정: PDF/이미지 여부에 맞춰 드라이브 업로드
+                        drive_link = upload_file_to_drive(file_bytes, file_name, file_mime_type)
                         
                         row_data = [
                             manual_code,
@@ -206,15 +225,15 @@ with tab2:
         st.dataframe(filtered_df[display_cols], use_container_width=True, hide_index=True)
         
         st.markdown("---")
-        st.markdown("### 🖼️ 선택 원자재 라벨 이미지 확인")
-        st.caption("위 검색 결과에 나타난 원자재들의 원본 라벨 이미지를 확인할 수 있습니다.")
+        st.markdown("### 🖼️ 선택 원자재 라벨(원본) 확인")
+        st.caption("위 검색 결과에 나타난 원자재들의 원본 파일(이미지/PDF)을 확인할 수 있습니다.")
         
         for idx, row in filtered_df.iterrows():
             product_name = row.get('원재료의 제품명', '이름 없음')
             img_url = row.get('이미지 링크', '')
             
             if img_url and str(img_url).startswith('http'):
-                st.markdown(f"🔗 **[{product_name}] 원본 라벨 이미지 열기** : {img_url}")
+                st.markdown(f"🔗 **[{product_name}] 원본 파일 열기** : {img_url}")
 
     else:
         st.info("현재 데이터베이스에 등록된 원자재가 없습니다. 탭 1에서 라벨을 스캔하여 등록해주세요.")
