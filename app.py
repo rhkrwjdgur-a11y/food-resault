@@ -43,7 +43,10 @@ def upload_image_to_drive(image_bytes, file_name):
         file_metadata = {'name': file_name, 'parents': [FOLDER_ID]}
         media = MediaIoBaseUpload(io.BytesIO(image_bytes), mimetype='image/jpeg', resumable=True)
         uploaded_file = service.files().create(
-            body=file_metadata, media_body=media, fields='id, webViewLink'
+            body=file_metadata, 
+            media_body=media, 
+            fields='id, webViewLink',
+            supportsAllDrives=True  # 기업용 드라이브 권한 해결 옵션
         ).execute()
         return uploaded_file.get('webViewLink')
     except Exception as e:
@@ -109,7 +112,6 @@ def extract_label_data(image):
 # ==========================================
 st.title("원자재 표시사항 라벨 통합 관리 시스템")
 
-# 💡 이 부분이 누락되었었기 때문에 NameError가 발생했던 것입니다.
 tab1, tab2 = st.tabs(["📸 한글라벨 스캔 및 DB 저장", "🔍 원자재 DB 검색 대시보드"])
 
 # [탭 1] 한글라벨 스캔 및 저장
