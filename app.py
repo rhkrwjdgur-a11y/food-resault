@@ -109,6 +109,17 @@ def load_sheet_data():
         st.error(f"데이터베이스 로드 실패: {e}")
         return pd.DataFrame()
 
+@st.cache_data(ttl=600)
+def load_bom_data():
+    try:
+        creds = get_google_creds()
+        gc = gspread.authorize(creds)
+        sh = gc.open_by_key(SHEET_ID)
+        worksheet = sh.worksheet("배합비 DB")
+        return pd.DataFrame(worksheet.get_all_records())
+    except Exception as e:
+        return pd.DataFrame()
+
 # ==========================================
 # 3. Gemini Vision API 데이터 파싱
 # ==========================================
@@ -143,10 +154,9 @@ def extract_label_data(file_bytes, mime_type):
         return None, f"AI 분석 에러: {e}"
 
 # ==========================================
-# 4. 화면 내 인라인 뷰어 함수 (구글 드라이브 iframe 변환)
+# 4. 화면 내 인라인 뷰어 함수
 # ==========================================
 def render_inline_viewer(img_url):
-    # 구글 드라이브 URL에서 파일 ID를 추출하여 미리보기(preview) 링크로 변환
     match = re.search(r'/d/([a-zA-Z0-9_-]+)', str(img_url))
     if match:
         file_id = match.group(1)
@@ -158,10 +168,9 @@ def render_inline_viewer(img_url):
 # ==========================================
 # 5. Streamlit UI 렌더링
 # ==========================================
-st.title("원자재 표시사항 라벨 통합 관리 시스템")
+st.title("원자재 표시사항 및 BOM 통합 추적 시스템")
 
-# 💡 탭 3개로 확장
-tab1, tab2, tab3 = st.tabs(["📸 라벨 스캔 및 등록", "🔍 원자재 DB 검색 대시보드", "🚨 잠복 알레르기/신규성분 추적기"])
+tab1, tab2, tab3 = st.tabs(["📸 라벨 스캔 및 등록", "🔍 원자재 DB 검색 대시보드", "🚨 잠복 알레르기/완제품 역추적기"])
 
 # ----------------------------------------------------
 # [탭 1] 라벨 스캔 및 등록
@@ -182,7 +191,7 @@ with tab1:
             st.image(image, caption='업로드된 라벨 이미지', width=400)
             ext = ".jpg"
         
-        manual_code = st.text_input("📦 원자재 코드 번호를 입력하세요 (예: 10356):")
+        manual_code = st.text_input("📦 원자재 코드 번호를 입력하세요 (예: 20123):")
         
         if st.button("파일 분석 및 스프레드시트 저장", type="primary"):
             if not manual_code:
@@ -202,7 +211,6 @@ with tab1:
                             st.error(error)
                         else:
                             st.success("데이터 추출 성공! 드라이브 및 시트에 저장을 시작합니다.")
-                            st.json(parsed_data)
                             
                             current_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                             file_name = f"원자재라벨_{parsed_data.get('원재료의 제품명', '미상')}_{current_time}{ext}"
@@ -241,6 +249,7 @@ with tab1:
 with tab2:
     st.markdown("### 등록된 원자재 목록 검색")
     if st.button("🔄 데이터베이스 새로고침", key="refresh_tab2"):
+        st.cache_data.clear()
         st.rerun()
 
     df = load_sheet_data()
@@ -251,19 +260,17 @@ with tab2:
             search_name = st.text_input("🔍 원재료 제품명 또는 코드로 검색:")
         with col2:
             allergen_filter = st.multiselect("⚠️ 공식 알레르기 표기란 기준 필터링:", 
-                                             ["우유", "대두", "밀", "참깨", "계란", "토마토", "복숭아", "아황산류", "돼지고기"])
+                                             ["우유", "대두", "밀", "참깨", "계란", "토마토", "복숭아", "아황산류", "돼지고기", "잣"])
         
         if not search_name and not allergen_filter:
             st.info("👆 원하시는 원재료의 '제품명', '코드'를 검색하시거나 '알레르기 필터'를 선택하시면 목록이 나타납니다.")
         else:
             filtered_df = df
-            
             if search_name:
                 filtered_df = filtered_df[
                     filtered_df['원재료의 제품명'].astype(str).str.contains(search_name, na=False) |
                     filtered_df['코드'].astype(str).str.contains(search_name, na=False)
                 ]
-                
             if allergen_filter:
                 pattern = '|'.join(allergen_filter)
                 filtered_df = filtered_df[filtered_df['알러지유발물질'].astype(str).str.contains(pattern, regex=True, na=False)]
@@ -277,13 +284,9 @@ with tab2:
                 
                 st.markdown("---")
                 st.markdown("### 🖼️ 선택 원자재 원본 라벨 확인")
-                st.caption("아래 목록을 클릭하면 새 창으로 나가지 않고 화면 내부에서 바로 문서를 확인할 수 있습니다.")
-                
-                # 💡 인라인 뷰어로 교체
                 for idx, row in filtered_df.iterrows():
                     product_name = row.get('원재료의 제품명', '이름 없음')
                     img_url = row.get('이미지 링크', '')
-                    
                     if img_url and str(img_url).startswith('http'):
                         with st.expander(f"📄 [{product_name}] 원본 라벨/스펙 문서 보기"):
                             render_inline_viewer(img_url)
@@ -291,31 +294,85 @@ with tab2:
         st.info("현재 데이터베이스에 등록된 원자재가 없습니다.")
 
 # ----------------------------------------------------
-# [탭 3] 잠복 알레르기 / 신규 성분 추적기 (핵심 기능)
+# [탭 3] 잠복 알레르기 / 완제품 역추적기 (핵심 기능)
 # ----------------------------------------------------
 with tab3:
-    st.markdown("### 🚨 신규/잠복 알레르기 유발물질 전수조사")
-    st.caption("공식 '알러지유발물질' 란에 기재되지 않았더라도, **'원재료의 한글표시사항(전체 성분 리스트)'** 속에 숨어있는 타겟 물질(예: 참깨, 마카다미아 등 새로 추가된 성분)을 샅샅이 찾아냅니다.")
+    st.markdown("### 🚨 신규/잠복 알레르기 전수조사 및 완제품(BOM) 역추적")
+    st.caption("공식 '알러지유발물질' 란에 기재되지 않았더라도, 숨어있는 타겟 물질(예: 참깨, 아몬드 등)을 샅샅이 찾아내어 **해당 원료가 사용된 '모든 완제품 리스트'를 다계층(선물세트 등)까지 즉시 추적**합니다.")
     
     df_track = load_sheet_data()
+    bom_df = load_bom_data()
     
     if not df_track.empty:
-        target_allergen = st.text_input("🔍 추적할 숨은 성분 키워드를 입력하세요 (예: 참깨, 호두, 잣):")
+        target_allergen = st.text_input("🔍 추적할 숨은 성분 키워드를 입력하세요 (예: 참깨, 아몬드, 잣):")
         
         if target_allergen:
-            # 💡 '원재료의 한글표시사항' 전체 텍스트에서 키워드 검색
-            mask = df_track['원재료의 한글표시사항'].astype(str).str.contains(target_allergen, regex=False, na=False)
-            tracked_df = df_track[mask]
+            mask_name = df_track['원재료의 제품명'].astype(str).str.contains(target_allergen, regex=False, na=False)
+            mask_detail = df_track['원재료의 한글표시사항'].astype(str).str.contains(target_allergen, regex=False, na=False)
+            
+            tracked_df = df_track[mask_name | mask_detail].copy()
             
             if tracked_df.empty:
-                st.success(f"🎉 현재 DB의 모든 원자재 성분 중에 '{target_allergen}'이(가) 포함된 원료는 없습니다!")
+                st.success(f"🎉 현재 DB의 모든 원자재 중 제품명이나 성분 목록에 '{target_allergen}'이(가) 포함된 원료는 없습니다!")
             else:
-                st.error(f"🚨 주의! 전체 성분 목록 중에 '{target_allergen}'이(가) 포함된 원자재를 {len(tracked_df)}건 발견했습니다.")
+                st.error(f"🚨 타겟 물질('{target_allergen}')이 포함된 원자재를 {len(tracked_df)}건 발견했습니다.")
                 
-                # 확인을 돕기 위해 필요한 컬럼만 추출하여 노출
-                view_cols = ['코드', '원재료의 제품명', '원재료의 한글표시사항', '알러지유발물질', '이미지 링크']
+                def check_certainty(row):
+                    in_name = target_allergen in str(row['원재료의 제품명'])
+                    in_detail = target_allergen in str(row['원재료의 한글표시사항'])
+                    if in_detail: return "🚨 [확정] 완제품 알레르기 갱신 필수"
+                    elif in_name and not in_detail: return "⚠️ [확인필요] 제조사 원물 함유 여부 문의"
+                    else: return "⚠️ 검토 요망"
+                
+                tracked_df['시스템 판정 결과'] = tracked_df.apply(check_certainty, axis=1)
+                
+                view_cols = ['코드', '원재료의 제품명', '시스템 판정 결과', '원재료의 한글표시사항', '알러지유발물질', '이미지 링크']
                 st.dataframe(tracked_df[view_cols[:-1]], use_container_width=True, hide_index=True)
                 
+                st.markdown("---")
+                
+                # 💡 ERP 다단계(다계층) BOM 완벽 대응 로직
+                if not bom_df.empty:
+                    st.markdown(f"#### 🏭 '{target_allergen}' 성분이 유입될 위험이 있는 완제품 리스트 (다계층 추적)")
+                    
+                    flagged_codes = tracked_df['코드'].astype(str).tolist()
+                    affected_products_list = []
+                    
+                    # Code2에서 1차 검색 (일반 제품)
+                    if 'Code2' in bom_df.columns:
+                        level1_matches = bom_df[bom_df['Code2'].astype(str).isin(flagged_codes)]
+                        for _, row in level1_matches.iterrows():
+                            affected_products_list.append({
+                                '완제품코드 (Code1)': str(row.get('Code1', '')),
+                                '완제품명 (Name1)': str(row.get('Name1', '')),
+                                '적발된 원자재코드': str(row.get('Code2', '')),
+                                '원자재명': str(row.get('Name2', '')),
+                                'BOM 계층': '1단계 (일반제품)'
+                            })
+                            
+                    # Code3에서 2차 검색 (선물세트 등)
+                    if 'Code3' in bom_df.columns:
+                        level2_matches = bom_df[bom_df['Code3'].astype(str).isin(flagged_codes)]
+                        for _, row in level2_matches.iterrows():
+                            affected_products_list.append({
+                                '완제품코드 (Code1)': str(row.get('Code1', '')),
+                                '완제품명 (Name1)': str(row.get('Name1', '')),
+                                '적발된 원자재코드': str(row.get('Code3', '')),
+                                '원자재명': str(row.get('Name3', '')),
+                                'BOM 계층': '2단계 (선물/수출 박스)'
+                            })
+                    
+                    if not affected_products_list:
+                        st.success("✅ 위에서 적발된 원료가 현재 배합비(BOM) DB에 등록된 어떠한 완제품(일반/선물/수출용)에도 사용되지 않고 있습니다.")
+                    else:
+                        affected_df = pd.DataFrame(affected_products_list).drop_duplicates()
+                        unique_products_count = len(affected_df['완제품코드 (Code1)'].unique())
+                        
+                        st.warning(f"⚠️ 총 {unique_products_count}종의 완제품(선물세트 포함)에 해당 원료가 투입되고 있습니다! 즉각적인 패키지 갱신 검토가 필요합니다.")
+                        st.dataframe(affected_df, use_container_width=True, hide_index=True)
+                else:
+                    st.info("💡 구글 스프레드시트에 '배합비 DB' 시트를 추가하고 BOM 데이터를 등록하시면 다계층 역추적 기능이 활성화됩니다.")
+
                 st.markdown("---")
                 st.markdown("#### 🖼️ 적발된 원자재 라벨 직접 확인")
                 for idx, row in tracked_df.iterrows():
@@ -323,7 +380,7 @@ with tab3:
                     img_url = row.get('이미지 링크', '')
                     
                     if img_url and str(img_url).startswith('http'):
-                        with st.expander(f"⚠️ [{product_name}] 원본 라벨에서 '{target_allergen}' 표기 직접 확인하기"):
+                        with st.expander(f"📄 [{product_name}] 원본 라벨에서 '{target_allergen}' 표기 직접 확인하기"):
                             render_inline_viewer(img_url)
     else:
         st.info("데이터베이스를 먼저 등록해 주세요.")
