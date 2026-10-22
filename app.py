@@ -7,7 +7,7 @@ import io
 import json
 import re
 from PIL import Image
-from google.oauth2.service_account import Credentials
+from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 
@@ -16,7 +16,6 @@ from googleapiclient.http import MediaIoBaseUpload
 # ==========================================
 st.set_page_config(page_title="원자재 표시사항 DB 시스템", layout="wide")
 
-# Secrets 설정 불러오기
 try:
     GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
     SHEET_ID = st.secrets["GOOGLE_SHEET_ID"]
@@ -26,12 +25,22 @@ except KeyError as e:
     st.stop()
 
 genai.configure(api_key=GEMINI_API_KEY)
-MODEL_NAME = "gemini-3.6-flash" # 이전에 작동 확인된 모델명 사용
+MODEL_NAME = "gemini-3.6-flash"
 
+# 💡 수정된 부분: 서비스 계정이 아닌 사용자 Refresh Token 인증 방식 적용
 def get_google_creds():
-    scopes = ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
-    creds_dict = dict(st.secrets["google_oauth"])
-    return Credentials.from_service_account_info(creds_dict, scopes=scopes)
+    try:
+        creds = Credentials(
+            token=None,
+            refresh_token=st.secrets["google_oauth"]["refresh_token"],
+            token_uri="https://oauth2.googleapis.com/token",
+            client_id=st.secrets["google_oauth"]["client_id"],
+            client_secret=st.secrets["google_oauth"]["client_secret"]
+        )
+        return creds
+    except Exception as e:
+        st.error(f"구글 인증 로드 실패: {e}")
+        return None
 
 # ==========================================
 # 2. 구글 드라이브 & 시트 통신 함수
@@ -46,7 +55,7 @@ def upload_image_to_drive(image_bytes, file_name):
             body=file_metadata, 
             media_body=media, 
             fields='id, webViewLink',
-            supportsAllDrives=True  # 기업용 드라이브 권한 해결 옵션
+            supportsAllDrives=True
         ).execute()
         return uploaded_file.get('webViewLink')
     except Exception as e:
@@ -123,7 +132,6 @@ with tab1:
         image = Image.open(uploaded_file)
         st.image(image, caption='업로드된 라벨 이미지', width=400)
         
-        # 신규 추가된 수동 코드 입력란
         manual_code = st.text_input("📦 원자재 코드 번호를 입력하세요 (예: 10356):", help="라벨 사진에 코드가 없는 경우 직접 입력해야 DB에 반영됩니다.")
         
         if st.button("이미지 분석 및 스프레드시트 저장", type="primary"):
@@ -145,7 +153,6 @@ with tab1:
                         
                         drive_link = upload_image_to_drive(image_bytes, file_name)
                         
-                        # AI 추출 데이터에 수동 입력 코드(manual_code) 결합하여 시트에 전송
                         row_data = [
                             manual_code,
                             parsed_data.get("식품유형", ""),
