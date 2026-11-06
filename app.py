@@ -28,8 +28,24 @@ except KeyError as e:
 genai.configure(api_key=GEMINI_API_KEY)
 MODEL_NAME = "gemini-3.6-flash"
 
-# 관리자 비밀번호 변경 완료
 ADMIN_PASSWORD = "2082"
+
+# 💡 식약처 기준 식품유형 및 알레르기 마스터 데이터
+FOOD_TYPES = [
+    "선택하세요 (검색 가능)", "과자류", "빵류 또는 떡류", "코코아가공품류 또는 초콜릿류", "당류", "잼류", "두부류 또는 묵류", 
+    "식용유지류", "면류", "음료류", "특수용도식품", "장류", "조미식품", "절임류 또는 조림류", "농산가공품류", 
+    "두류가공품", "서류가공품", "과채가공품", "곡류가공품", "식육가공품", "알가공품", "유가공품", "수산가공품", 
+    "식품첨가물(혼합제제)", "식품첨가물(화학적합성품)", "천연향료", "합성향료", "기타가공품"
+]
+
+OLD_ALLERGENS = [
+    "🟩 해당없음 (안전)", "난류(가금류)", "우유", "메밀", "땅콩", "대두", "밀", "고등어", "게", "새우", 
+    "돼지고기", "복숭아", "토마토", "아황산류", "호두", "닭고기", "쇠고기", "오징어", "조개류(굴, 전복, 홍합 포함)", "잣"
+]
+
+NEW_ALLERGENS = [
+    "🟩 해당없음 (안전)", "참깨", "들깨", "아몬드", "캐슈넛"
+]
 
 def get_google_creds():
     try:
@@ -186,63 +202,91 @@ is_admin = (user_pw == ADMIN_PASSWORD)
 
 if not is_admin:
     # ----------------------------------------------------
-    # [프론트엔드] 협력업체 다중 등록 폼 (일괄 제출 기능)
+    # [프론트엔드] 협력업체 다중 등록 폼 (UX 완벽 개선판)
     # ----------------------------------------------------
-    st.title("🤝 원자재 라벨 및 정보 다중 등록 시스템")
-    st.info("정확한 품질관리를 위해 사업자등록증 상의 정보와 라벨 원본 내용을 똑같이 기재해 주십시오.")
+    st.title("🤝 원자재 라벨 및 표시사항 다중 등록 시스템")
     
-    # 💡 동적 폼 생성: 입력할 품목 개수를 지정하면 그만큼 가로형 입력칸이 쭈르륵 펼쳐짐
-    num_items = st.number_input("📝 한 번에 제출할 품목 개수를 선택하세요 (최대 20개):", min_value=1, max_value=20, value=1)
+    # 💡 도입 배경 및 계기 안내문 추가
+    st.markdown("""
+    <div style="background-color: #f0f7ff; padding: 15px; border-radius: 8px; border-left: 5px solid #0056b3; margin-bottom: 20px;">
+    <strong>📢 [안내] 원자재 알레르기 유발물질 전수조사 및 DB화</strong><br>
+    최근 식약처 법규 개정으로 인해 <strong>알레르기 유발물질 의무 표시 대상이 확대(참깨, 들깨, 아몬드, 캐슈넛 추가)</strong> 되었습니다. <br>
+    연세유업은 소비자의 안전과 완벽한 법규 준수를 위해, 협력업체에서 납품하시는 모든 원료의 <strong>'원본 라벨(한글표시사항)' 및 '성분 정보'</strong>를 전수조사 중입니다. 정확한 품질관리를 위해 사업자등록증 상의 정보와 라벨 원본 내용을 똑같이 기재해 주시기를 당부드립니다.
+    </div>
+    """, unsafe_allow_html=True)
     
     with st.form("vendor_bulk_form"):
+        # 💡 공통 정보 (제조원) 상단 분리
+        st.markdown("### 🏢 납품업체(제조원) 정보")
+        v_maker_global = st.text_input("납품하시는 업체명(제조원 또는 판매원)을 적어주세요 (사업자등록증 기준 필수 기재)")
+        
+        st.markdown("---")
+        # 💡 입력 편의성을 위한 품목 개수 조절 (1~15개)
+        num_items = st.number_input("📝 연세유업에 납품하는 품목 개수를 적으세요 (최대 15개):", min_value=1, max_value=15, value=1)
+        
         items_data = []
         for i in range(int(num_items)):
             st.markdown(f"#### 📌 제출 품목 {i+1}")
             
-            # 첫 번째 줄: 기본 정보 (가로로 촘촘하게 배치)
-            col1, col2, col3, col4 = st.columns(4)
+            # 첫 번째 줄
+            col1, col2, col3 = st.columns([1.5, 1.5, 1])
             with col1:
                 v_name = st.text_input("🏷️ 제품명 (라벨 표기 기준, 필수)", key=f"name_{i}")
             with col2:
-                v_type = st.text_input("분류 식품유형 (필수)", key=f"type_{i}")
+                # 💡 식품유형 자동완성 드롭다운
+                v_type = st.selectbox("분류 식품유형 (타이핑하여 검색 가능, 필수)", options=FOOD_TYPES, key=f"type_{i}")
             with col3:
-                v_maker = st.text_input("🏭 제조원 또는 판매원 (필수)", key=f"maker_{i}")
-            with col4:
                 v_origin = st.text_input("🌍 원산지", key=f"origin_{i}")
                 
-            # 두 번째 줄: 알레르기, 원재료명, 라벨 첨부 (가로로 촘촘하게 배치)
-            col5, col6, col7 = st.columns([1.5, 2, 1.5])
+            # 두 번째 줄
+            col4, col5 = st.columns([2, 2])
+            with col4:
+                # 💡 기존 알레르기 다중 선택
+                v_old_allergy = st.multiselect("⚠️ 기존 알레르기 물질 (필수 체크)", options=OLD_ALLERGENS, key=f"oa_{i}")
+                # 💡 신규 알레르기 다중 선택
+                v_new_allergy = st.multiselect("🚨 신규 알레르기 물질 (필수 체크)", options=NEW_ALLERGENS, key=f"na_{i}")
             with col5:
-                v_new_allergy = st.multiselect("🚨 신규 알레르기 (필수 체크)", ["참깨", "들깨", "아몬드", "캐슈넛", "해당없음"], key=f"na_{i}")
-                v_old_allergy = st.text_input("⚠️ 기존 알레르기", placeholder="없으면 '해당없음'", key=f"oa_{i}")
-            with col6:
-                v_ingredients = st.text_area("📝 원재료명 및 함량 (쉼표 구분)", height=110, key=f"ing_{i}")
-            with col7:
-                uploaded_file = st.file_uploader("📸 원본 라벨 첨부 (필수)", type=['jpg', 'jpeg', 'png', 'pdf'], key=f"file_{i}")
+                v_ingredients = st.text_area("📝 원재료명 및 함량 (쉼표로 구분하여 전부 기재)", height=120, key=f"ing_{i}")
             
-            # 입력된 위젯의 값을 딕셔너리로 저장
+            # 세 번째 줄
+            uploaded_file = st.file_uploader("📸 원본 라벨 첨부 (PDF/JPG 필수)", type=['jpg', 'jpeg', 'png', 'pdf'], key=f"file_{i}")
+            
             items_data.append({
-                "name": v_name, "type": v_type, "maker": v_maker, "origin": v_origin,
-                "new_allergy": v_new_allergy, "old_allergy": v_old_allergy,
+                "name": v_name, "type": v_type, "maker": v_maker_global, "origin": v_origin,
+                "old_allergy": v_old_allergy, "new_allergy": v_new_allergy,
                 "ingredients": v_ingredients, "file": uploaded_file
             })
             
-            st.markdown("---") # 품목 간 구분선
+            st.markdown("<hr style='border:1px dashed #ccc'>", unsafe_allow_html=True)
             
         submit_btn = st.form_submit_button("📤 작성한 품목 모두 제출하기", type="primary", use_container_width=True)
         
         if submit_btn:
-            # 💡 다중 품목 전체 유효성 검사 (하나라도 빠지면 통과 불가)
+            # 전체 폼 통합 유효성 검사 로직
             error_found = False
+            
+            if not v_maker_global:
+                st.error("❌ 상단에 [납품업체명(제조원)]을 반드시 입력해 주세요.")
+                error_found = True
+            
             for idx, item in enumerate(items_data):
-                if not item['name'] or not item['type'] or not item['ingredients'] or not item['file'] or not item['maker']:
-                    st.error(f"❌ [품목 {idx+1}] 필수 항목(제품명, 제조원, 식품유형, 원재료명, 파일 첨부)이 누락되었습니다.")
+                if not item['name'] or item['type'] == "선택하세요 (검색 가능)" or not item['ingredients'] or not item['file']:
+                    st.error(f"❌ [품목 {idx+1}] 필수 항목(제품명, 식품유형, 원재료명, 파일 첨부)이 누락되었습니다.")
                     error_found = True
-                elif not item['new_allergy']:
-                    st.error(f"❌ [품목 {idx+1}] 신규 알레르기 물질 포함 여부를 반드시 체크해 주세요.")
+                
+                # 💡 알레르기 선택 여부 및 '해당없음' 배타성 검사
+                if not item['old_allergy']:
+                    st.error(f"❌ [품목 {idx+1}] 기존 알레르기 포함 여부를 체크해 주세요. (없으면 '해당없음')")
                     error_found = True
-                elif "해당없음" in item['new_allergy'] and len(item['new_allergy']) > 1:
-                    st.error(f"❌ [품목 {idx+1}] '해당없음'과 다른 물질을 동시에 선택할 수 없습니다.")
+                elif "🟩 해당없음 (안전)" in item['old_allergy'] and len(item['old_allergy']) > 1:
+                    st.error(f"❌ [품목 {idx+1}] 기존 알레르기에서 '해당없음'과 다른 물질을 중복 선택할 수 없습니다.")
+                    error_found = True
+                    
+                if not item['new_allergy']:
+                    st.error(f"❌ [품목 {idx+1}] 신규 알레르기 포함 여부를 체크해 주세요. (없으면 '해당없음')")
+                    error_found = True
+                elif "🟩 해당없음 (안전)" in item['new_allergy'] and len(item['new_allergy']) > 1:
+                    st.error(f"❌ [품목 {idx+1}] 신규 알레르기에서 '해당없음'과 다른 물질을 중복 선택할 수 없습니다.")
                     error_found = True
                     
             if not error_found:
@@ -253,7 +297,6 @@ if not is_admin:
                     for idx, item in enumerate(items_data):
                         file_bytes = item['file'].getvalue()
                         file_mime_type = item['file'].type
-                        
                         ext = ".pdf" if "pdf" in file_mime_type.lower() else ".jpg"
                         file_name = f"업체제출_{item['name']}_{current_time}_{idx+1}{ext}"
                         
@@ -262,7 +305,7 @@ if not is_admin:
                         if drive_link and file_id:
                             row_data = [
                                 "", item['name'], item['type'], item['ingredients'], item['origin'], item['maker'], 
-                                item['old_allergy'], ", ".join(item['new_allergy']), current_time, 
+                                ", ".join(item['old_allergy']), ", ".join(item['new_allergy']), current_time, 
                                 drive_link, file_id, "대기중", "검증전"
                             ]
                             res = append_data_to_sheet(row_data)
@@ -274,7 +317,7 @@ if not is_admin:
                             st.error(f"[품목 {idx+1}] 파일 업로드에 실패했습니다.")
                     
                     if success_count == num_items:
-                        st.success(f"🎉 총 {success_count}건의 품목 전체가 성공적으로 제출되었습니다! 감사합니다.")
+                        st.success(f"🎉 총 {success_count}건의 품목 전체가 성공적으로 제출되었습니다! 협조해 주셔서 감사합니다.")
                     elif success_count > 0:
                         st.warning(f"일부 품목만 제출되었습니다. ({success_count}/{num_items}건 성공)")
 
@@ -345,8 +388,8 @@ else:
                         col_a, col_b = st.columns(2)
                         with col_a:
                             st.markdown("**[업체 제출 정보]**")
-                            st.write(f"- **제품명**: {row.get('제품명')}")
                             st.write(f"- **제조원**: {row.get('제조원')}")
+                            st.write(f"- **제품명**: {row.get('제품명')} ({row.get('식품유형')})")
                             st.write(f"- **원재료명**: {row.get('원재료명(한글표시사항)')}")
                             st.write(f"- **기존/신규 알레르기**: {row.get('기존알레르기')} / {row.get('신규알레르기')}")
                             
@@ -414,7 +457,7 @@ else:
                     approved_df['코드'].astype(str).str.contains(search_name, na=False)
                 ]
             
-            display_cols = ['코드', '제품명', '원재료명(한글표시사항)', '제조원', '신규알레르기', '검증결과']
+            display_cols = ['코드', '제품명', '식품유형', '원재료명(한글표시사항)', '제조원', '신규알레르기', '검증결과']
             st.dataframe(approved_df[display_cols], use_container_width=True, hide_index=True)
         else:
             st.info("데이터가 없습니다.")
