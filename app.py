@@ -30,7 +30,6 @@ MODEL_NAME = "gemini-3.6-flash"
 
 ADMIN_PASSWORD = "2082"
 
-# 💡 식약처 기준 식품유형 및 알레르기 마스터 데이터
 FOOD_TYPES = [
     "선택하세요 (검색 가능)", "과자류", "빵류 또는 떡류", "코코아가공품류 또는 초콜릿류", "당류", "잼류", "두부류 또는 묵류", 
     "식용유지류", "면류", "음료류", "특수용도식품", "장류", "조미식품", "절임류 또는 조림류", "농산가공품류", 
@@ -153,7 +152,7 @@ def load_master_data():
         return pd.DataFrame()
 
 # ==========================================
-# 3. AI 교차 검증 및 코드 추천 로직
+# 3. AI 교차 검증 및 공용 헬퍼 함수
 # ==========================================
 def verify_with_ai(file_bytes, mime_type, vendor_data, master_data_json):
     prompt = f"""
@@ -191,6 +190,9 @@ def render_inline_viewer(img_url):
     else:
         st.markdown(f"[링크 직접 열기]({img_url})")
 
+def convert_df_to_csv(df):
+    return df.to_csv(index=False).encode('utf-8-sig')
+
 # ==========================================
 # 4. 화면 라우팅 (관리자 vs 협력업체)
 # ==========================================
@@ -202,11 +204,10 @@ is_admin = (user_pw == ADMIN_PASSWORD)
 
 if not is_admin:
     # ----------------------------------------------------
-    # [프론트엔드] 협력업체 다중 등록 폼 (UX 완벽 개선판)
+    # [프론트엔드] 협력업체 다중 등록 폼 (일괄 제출 기능)
     # ----------------------------------------------------
     st.title("🤝 원자재 라벨 및 표시사항 다중 등록 시스템")
     
-    # 💡 도입 배경 및 계기 안내문 추가
     st.markdown("""
     <div style="background-color: #f0f7ff; padding: 15px; border-radius: 8px; border-left: 5px solid #0056b3; margin-bottom: 20px;">
     <strong>📢 [안내] 원자재 알레르기 유발물질 전수조사 및 DB화</strong><br>
@@ -216,39 +217,31 @@ if not is_admin:
     """, unsafe_allow_html=True)
     
     with st.form("vendor_bulk_form"):
-        # 💡 공통 정보 (제조원) 상단 분리
         st.markdown("### 🏢 납품업체(제조원) 정보")
         v_maker_global = st.text_input("납품하시는 업체명(제조원 또는 판매원)을 적어주세요 (사업자등록증 기준 필수 기재)")
         
         st.markdown("---")
-        # 💡 입력 편의성을 위한 품목 개수 조절 (1~15개)
         num_items = st.number_input("📝 연세유업에 납품하는 품목 개수를 적으세요 (최대 15개):", min_value=1, max_value=15, value=1)
         
         items_data = []
         for i in range(int(num_items)):
             st.markdown(f"#### 📌 제출 품목 {i+1}")
             
-            # 첫 번째 줄
             col1, col2, col3 = st.columns([1.5, 1.5, 1])
             with col1:
                 v_name = st.text_input("🏷️ 제품명 (라벨 표기 기준, 필수)", key=f"name_{i}")
             with col2:
-                # 💡 식품유형 자동완성 드롭다운
                 v_type = st.selectbox("분류 식품유형 (타이핑하여 검색 가능, 필수)", options=FOOD_TYPES, key=f"type_{i}")
             with col3:
                 v_origin = st.text_input("🌍 원산지", key=f"origin_{i}")
                 
-            # 두 번째 줄
             col4, col5 = st.columns([2, 2])
             with col4:
-                # 💡 기존 알레르기 다중 선택
                 v_old_allergy = st.multiselect("⚠️ 기존 알레르기 물질 (필수 체크)", options=OLD_ALLERGENS, key=f"oa_{i}")
-                # 💡 신규 알레르기 다중 선택
                 v_new_allergy = st.multiselect("🚨 신규 알레르기 물질 (필수 체크)", options=NEW_ALLERGENS, key=f"na_{i}")
             with col5:
                 v_ingredients = st.text_area("📝 원재료명 및 함량 (쉼표로 구분하여 전부 기재)", height=120, key=f"ing_{i}")
             
-            # 세 번째 줄
             uploaded_file = st.file_uploader("📸 원본 라벨 첨부 (PDF/JPG 필수)", type=['jpg', 'jpeg', 'png', 'pdf'], key=f"file_{i}")
             
             items_data.append({
@@ -262,7 +255,6 @@ if not is_admin:
         submit_btn = st.form_submit_button("📤 작성한 품목 모두 제출하기", type="primary", use_container_width=True)
         
         if submit_btn:
-            # 전체 폼 통합 유효성 검사 로직
             error_found = False
             
             if not v_maker_global:
@@ -274,7 +266,6 @@ if not is_admin:
                     st.error(f"❌ [품목 {idx+1}] 필수 항목(제품명, 식품유형, 원재료명, 파일 첨부)이 누락되었습니다.")
                     error_found = True
                 
-                # 💡 알레르기 선택 여부 및 '해당없음' 배타성 검사
                 if not item['old_allergy']:
                     st.error(f"❌ [품목 {idx+1}] 기존 알레르기 포함 여부를 체크해 주세요. (없으면 '해당없음')")
                     error_found = True
@@ -327,8 +318,8 @@ else:
     # ----------------------------------------------------
     st.title("🛡️ 식품안전팀 품질관리 통합 대시보드")
     
-    admin_tab1, admin_tab2, admin_tab3, admin_tab4 = st.tabs([
-        "📊 제출 현황판", "🤖 AI 교차 검증 및 코드 승인", "🔍 등록 DB 검색", "🚨 배합비 역추적"
+    admin_tab1, admin_tab2, admin_tab3, admin_tab4, admin_tab5 = st.tabs([
+        "📊 제출 현황판", "🤖 AI 교차 검증 및 코드 승인", "🔍 등록 DB 검색", "🚨 배합비 역추적", "📋 완제품 알레르기 마스터"
     ])
     
     df = load_sheet_data()
@@ -444,21 +435,51 @@ else:
         else:
             st.info("등록된 데이터가 없습니다.")
 
-    # ------------------ [탭 3: 기존 DB 검색] ------------------
+    # ------------------ [탭 3: 기존 DB 검색 및 다운로드] ------------------
     with admin_tab3:
-        st.markdown("### 🔍 승인된 원자재 DB 검색")
+        st.markdown("### 🔍 승인된 원자재 DB 다중 검색 및 다운로드")
         if not df.empty:
-            approved_df = df[df['검증상태'] == '승인완료']
-            search_name = st.text_input("🔍 제품명 또는 코드 검색:")
+            approved_df = df[df['검증상태'] == '승인완료'].copy()
             
-            if search_name:
+            # 💡 다중 검색 기능 (콤마 구분)
+            search_query = st.text_input("🔍 제품명 또는 코드 검색 (쉼표로 구분하여 여러 개 동시 검색 가능, 예: 20014, 참깨):")
+            
+            if search_query:
+                queries = [q.strip() for q in search_query.split(',') if q.strip()]
+                pattern = '|'.join(queries)
+                
                 approved_df = approved_df[
-                    approved_df['제품명'].astype(str).str.contains(search_name, na=False) |
-                    approved_df['코드'].astype(str).str.contains(search_name, na=False)
+                    approved_df['제품명'].astype(str).str.contains(pattern, regex=True, na=False) |
+                    approved_df['코드'].astype(str).str.contains(pattern, regex=True, na=False)
                 ]
             
             display_cols = ['코드', '제품명', '식품유형', '원재료명(한글표시사항)', '제조원', '신규알레르기', '검증결과']
             st.dataframe(approved_df[display_cols], use_container_width=True, hide_index=True)
+            
+            # 💡 검색 결과 전체 엑셀(CSV) 다운로드 버튼
+            if not approved_df.empty:
+                csv = convert_df_to_csv(approved_df[display_cols])
+                st.download_button(
+                    label="📥 검색 결과 엑셀(CSV) 다운로드",
+                    data=csv,
+                    file_name="원자재_DB_검색결과.csv",
+                    mime="text/csv",
+                )
+                
+                st.markdown("---")
+                st.markdown("#### 🖼️ 선택 원자재 라벨 직접 확인 및 원본 다운로드")
+                for idx, row in approved_df.iterrows():
+                    product_name = row.get('제품명', '이름 없음')
+                    img_url = row.get('이미지링크', '')
+                    file_id = row.get('파일ID', '')
+                    
+                    if img_url and str(img_url).startswith('http'):
+                        with st.expander(f"📄 [{product_name}] 라벨 문서 보기 및 다운로드"):
+                            render_inline_viewer(img_url)
+                            # 💡 원본 다운로드 버튼 추가
+                            if file_id:
+                                download_url = f"https://drive.google.com/uc?export=download&id={file_id}"
+                                st.markdown(f"[💾 라벨 원본 파일 다운로드 (클릭 시 새 창에서 다운로드)]({download_url})")
         else:
             st.info("데이터가 없습니다.")
 
@@ -482,6 +503,10 @@ else:
                 else:
                     st.error(f"🚨 타겟 물질('{target_allergen}')이 포함된 원자재 {len(tracked_df)}건 적발.")
                     st.dataframe(tracked_df[['코드', '제품명', '원재료명(한글표시사항)', '신규알레르기']], use_container_width=True, hide_index=True)
+                    
+                    # 💡 적발 원자재 목록 CSV 다운로드
+                    csv_mat = convert_df_to_csv(tracked_df[['코드', '제품명', '원재료명(한글표시사항)', '신규알레르기']])
+                    st.download_button("📥 적발된 원자재 리스트 다운로드", data=csv_mat, file_name=f"{target_allergen}_포함_원자재.csv", mime="text/csv")
                     
                     st.markdown("---")
                     
@@ -514,5 +539,94 @@ else:
                             affected_df = pd.DataFrame(affected_products_list).drop_duplicates()
                             st.warning(f"⚠️ 총 {len(affected_df['완제품코드'].unique())}종의 완제품에 투입되고 있습니다.")
                             st.dataframe(affected_df, use_container_width=True, hide_index=True)
+                            
+                            # 💡 위험 완제품 목록 CSV 다운로드
+                            csv_prod = convert_df_to_csv(affected_df)
+                            st.download_button("📥 유입 위험 완제품 리스트 다운로드", data=csv_prod, file_name=f"{target_allergen}_유입_완제품.csv", mime="text/csv")
                     else:
                         st.info("BOM 데이터가 없습니다.")
+
+    # ------------------ [탭 5: 완제품 알레르기 마스터] ------------------
+    with admin_tab5:
+        st.markdown("### 📋 완제품 알레르기 통합 마스터 테이블")
+        
+        # 💡 상단 고정 멘트 (혼입 방지 문구)
+        WARNING_MSG = "알레르기 유발물질 혼입 가능성 있음" # 필요시 이 변수를 수정하세요
+        st.markdown(f"""
+        <div style="background-color: #ffe6e6; padding: 15px; border-radius: 8px; border-left: 5px solid #ff4d4d; margin-bottom: 20px;">
+        <strong>⚠️ [주의] 알레르기 교차 혼입 방지</strong><br>
+        당사는 알레르기 교차 혼입 방지 문구로 『<strong>{WARNING_MSG}</strong>』을(를) 사용하고 있으므로, 표시사항 스티커 및 패키지 후면 인쇄 시 반드시 해당 문구를 포함하여야 합니다.
+        </div>
+        """, unsafe_allow_html=True)
+        
+        bom_df = load_bom_data()
+        
+        if df.empty or bom_df.empty:
+            st.info("원자재 DB(승인 완료건) 또는 배합비 DB가 필요합니다.")
+        else:
+            with st.spinner("BOM 데이터와 원자재 DB를 스캔하여 완제품별 알레르기 테이블을 구성 중입니다..."):
+                valid_df = df[df['코드'] != '']
+                
+                prod_col = 'Name1' if 'Name1' in bom_df.columns else '완제품명'
+                prod_code_col = 'Code1' if 'Code1' in bom_df.columns else '완제품코드'
+                
+                unique_products = bom_df[[prod_code_col, prod_col]].drop_duplicates().dropna(subset=[prod_code_col])
+                
+                master_table_data = []
+                
+                code_cols = [c for c in bom_df.columns if str(c).startswith('Code') and c != 'Code1']
+                if not code_cols and '원자재코드' in bom_df.columns:
+                    code_cols = ['원자재코드']
+                
+                for _, p_row in unique_products.iterrows():
+                    p_code = p_row[prod_code_col]
+                    p_name = p_row[prod_col]
+                    
+                    if not str(p_code).strip(): continue
+                    
+                    p_bom_rows = bom_df[bom_df[prod_code_col] == p_code]
+                    
+                    used_rm_codes = set()
+                    for code_col in code_cols:
+                        used_rm_codes.update(p_bom_rows[code_col].dropna().astype(str).tolist())
+                    
+                    used_rm_df = valid_df[valid_df['코드'].astype(str).isin(used_rm_codes)]
+                    
+                    if used_rm_df.empty: continue
+                    
+                    all_old_allergies = set()
+                    all_new_allergies = set()
+                    
+                    for _, rm_row in used_rm_df.iterrows():
+                        old_str = str(rm_row.get('기존알레르기', ''))
+                        new_str = str(rm_row.get('신규알레르기', ''))
+                        
+                        for item in old_str.split(','):
+                            clean_item = item.strip()
+                            if clean_item and "해당없음" not in clean_item:
+                                all_old_allergies.add(clean_item)
+                                
+                        for item in new_str.split(','):
+                            clean_item = item.strip()
+                            if clean_item and "해당없음" not in clean_item:
+                                all_new_allergies.add(clean_item)
+                    
+                    final_old = ", ".join(sorted(list(all_old_allergies))) if all_old_allergies else "해당없음"
+                    final_new = ", ".join(sorted(list(all_new_allergies))) if all_new_allergies else "해당없음"
+                    
+                    master_table_data.append({
+                        "완제품코드": p_code,
+                        "완제품명": p_name,
+                        "기존 알레르기 요약": final_old,
+                        "신규 알레르기 요약": final_new
+                    })
+                
+                if master_table_data:
+                    master_res_df = pd.DataFrame(master_table_data)
+                    st.dataframe(master_res_df, use_container_width=True, hide_index=True)
+                    
+                    # 💡 완제품 알레르기 마스터 CSV 다운로드
+                    csv_master = convert_df_to_csv(master_res_df)
+                    st.download_button("📥 완제품 알레르기 마스터 테이블 다운로드", data=csv_master, file_name="완제품_알레르기_마스터.csv", mime="text/csv")
+                else:
+                    st.warning("매칭되는 완제품 데이터가 없습니다. 원자재 코드와 BOM 코드가 일치하는지 확인해주세요.")
