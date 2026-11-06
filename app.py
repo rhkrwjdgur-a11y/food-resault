@@ -204,27 +204,43 @@ is_admin = (user_pw == ADMIN_PASSWORD)
 
 if not is_admin:
     # ----------------------------------------------------
-    # [프론트엔드] 협력업체 다중 등록 폼 (일괄 제출 기능)
+    # [프론트엔드] 협력업체 다중 등록 폼
     # ----------------------------------------------------
     st.title("🤝 원자재 라벨 및 표시사항 다중 등록 시스템")
     
+    # 💡 멘트 수정: 시행 예정 및 선제적 파악 강조
     st.markdown("""
     <div style="background-color: #f0f7ff; padding: 15px; border-radius: 8px; border-left: 5px solid #0056b3; margin-bottom: 20px;">
-    <strong>📢 [안내] 원자재 알레르기 유발물질 전수조사 및 DB화</strong><br>
-    최근 식약처 법규 개정으로 인해 <strong>알레르기 유발물질 의무 표시 대상이 확대(참깨, 들깨, 아몬드, 캐슈넛 추가)</strong> 되었습니다. <br>
-    연세유업은 소비자의 안전과 완벽한 법규 준수를 위해, 협력업체에서 납품하시는 모든 원료의 <strong>'원본 라벨(한글표시사항)' 및 '성분 정보'</strong>를 전수조사 중입니다. 정확한 품질관리를 위해 사업자등록증 상의 정보와 라벨 원본 내용을 똑같이 기재해 주시기를 당부드립니다.
+    <strong>📢 [안내] 원자재 알레르기 유발물질 선제적 전수조사 및 DB화</strong><br>
+    식약처 법규 개정에 따라 향후 <strong>알레르기 유발물질 의무 표시 대상 확대(참깨, 들깨, 아몬드, 캐슈넛 추가)가 시행될 예정</strong>입니다. <br>
+    연세유업은 제도 시행 전 <strong>선제적인 파악 및 대응</strong>을 통해 완벽한 법규 준수와 소비자 안전을 확보하고자, 협력업체에서 납품하시는 모든 원료의 <strong>'원본 라벨(한글표시사항)' 및 '성분 정보'</strong>를 전수조사 중입니다. 정확한 품질관리를 위해 사업자등록증 상의 정보와 라벨 원본 내용을 똑같이 기재해 주시기를 당부드립니다.
     </div>
     """, unsafe_allow_html=True)
+    
+    # 💡 폼 영역 밖으로 품목 개수 설정 분리 및 UI 개선
+    if "item_count" not in st.session_state:
+        st.session_state.item_count = 1
+        
+    st.markdown("### 📝 제출 품목 개수 설정")
+    col_num1, col_num2, col_num3 = st.columns([3, 2, 5])
+    with col_num1:
+        new_count = st.number_input("연세유업 납품 품목 개수를 적으세요 (최대 15개)", min_value=1, max_value=15, value=st.session_state.item_count)
+    with col_num2:
+        st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
+        if st.button("입력칸 개수 적용 / 추가하기", type="secondary"):
+            st.session_state.item_count = new_count
+            st.rerun()
+            
+    st.markdown("<hr style='border:2px solid #ddd'>", unsafe_allow_html=True)
     
     with st.form("vendor_bulk_form"):
         st.markdown("### 🏢 납품업체(제조원) 정보")
         v_maker_global = st.text_input("납품하시는 업체명(제조원 또는 판매원)을 적어주세요 (사업자등록증 기준 필수 기재)")
         
         st.markdown("---")
-        num_items = st.number_input("📝 연세유업에 납품하는 품목 개수를 적으세요 (최대 15개):", min_value=1, max_value=15, value=1)
         
         items_data = []
-        for i in range(int(num_items)):
+        for i in range(int(st.session_state.item_count)):
             st.markdown(f"#### 📌 제출 품목 {i+1}")
             
             col1, col2, col3 = st.columns([1.5, 1.5, 1])
@@ -281,7 +297,7 @@ if not is_admin:
                     error_found = True
                     
             if not error_found:
-                with st.spinner(f"총 {num_items}건의 품목 데이터를 서버로 안전하게 전송 중입니다..."):
+                with st.spinner(f"총 {st.session_state.item_count}건의 품목 데이터를 서버로 안전하게 전송 중입니다..."):
                     success_count = 0
                     current_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                     
@@ -307,10 +323,10 @@ if not is_admin:
                         else:
                             st.error(f"[품목 {idx+1}] 파일 업로드에 실패했습니다.")
                     
-                    if success_count == num_items:
+                    if success_count == st.session_state.item_count:
                         st.success(f"🎉 총 {success_count}건의 품목 전체가 성공적으로 제출되었습니다! 협조해 주셔서 감사합니다.")
                     elif success_count > 0:
-                        st.warning(f"일부 품목만 제출되었습니다. ({success_count}/{num_items}건 성공)")
+                        st.warning(f"일부 품목만 제출되었습니다. ({success_count}/{st.session_state.item_count}건 성공)")
 
 else:
     # ----------------------------------------------------
@@ -441,7 +457,6 @@ else:
         if not df.empty:
             approved_df = df[df['검증상태'] == '승인완료'].copy()
             
-            # 💡 다중 검색 기능 (콤마 구분)
             search_query = st.text_input("🔍 제품명 또는 코드 검색 (쉼표로 구분하여 여러 개 동시 검색 가능, 예: 20014, 참깨):")
             
             if search_query:
@@ -456,7 +471,6 @@ else:
             display_cols = ['코드', '제품명', '식품유형', '원재료명(한글표시사항)', '제조원', '신규알레르기', '검증결과']
             st.dataframe(approved_df[display_cols], use_container_width=True, hide_index=True)
             
-            # 💡 검색 결과 전체 엑셀(CSV) 다운로드 버튼
             if not approved_df.empty:
                 csv = convert_df_to_csv(approved_df[display_cols])
                 st.download_button(
@@ -476,7 +490,6 @@ else:
                     if img_url and str(img_url).startswith('http'):
                         with st.expander(f"📄 [{product_name}] 라벨 문서 보기 및 다운로드"):
                             render_inline_viewer(img_url)
-                            # 💡 원본 다운로드 버튼 추가
                             if file_id:
                                 download_url = f"https://drive.google.com/uc?export=download&id={file_id}"
                                 st.markdown(f"[💾 라벨 원본 파일 다운로드 (클릭 시 새 창에서 다운로드)]({download_url})")
@@ -504,7 +517,6 @@ else:
                     st.error(f"🚨 타겟 물질('{target_allergen}')이 포함된 원자재 {len(tracked_df)}건 적발.")
                     st.dataframe(tracked_df[['코드', '제품명', '원재료명(한글표시사항)', '신규알레르기']], use_container_width=True, hide_index=True)
                     
-                    # 💡 적발 원자재 목록 CSV 다운로드
                     csv_mat = convert_df_to_csv(tracked_df[['코드', '제품명', '원재료명(한글표시사항)', '신규알레르기']])
                     st.download_button("📥 적발된 원자재 리스트 다운로드", data=csv_mat, file_name=f"{target_allergen}_포함_원자재.csv", mime="text/csv")
                     
@@ -540,7 +552,6 @@ else:
                             st.warning(f"⚠️ 총 {len(affected_df['완제품코드'].unique())}종의 완제품에 투입되고 있습니다.")
                             st.dataframe(affected_df, use_container_width=True, hide_index=True)
                             
-                            # 💡 위험 완제품 목록 CSV 다운로드
                             csv_prod = convert_df_to_csv(affected_df)
                             st.download_button("📥 유입 위험 완제품 리스트 다운로드", data=csv_prod, file_name=f"{target_allergen}_유입_완제품.csv", mime="text/csv")
                     else:
@@ -550,8 +561,7 @@ else:
     with admin_tab5:
         st.markdown("### 📋 완제품 알레르기 통합 마스터 테이블")
         
-        # 💡 상단 고정 멘트 (혼입 방지 문구)
-        WARNING_MSG = "알레르기 유발물질 혼입 가능성 있음" # 필요시 이 변수를 수정하세요
+        WARNING_MSG = "알레르기 유발물질 혼입 가능성 있음"
         st.markdown(f"""
         <div style="background-color: #ffe6e6; padding: 15px; border-radius: 8px; border-left: 5px solid #ff4d4d; margin-bottom: 20px;">
         <strong>⚠️ [주의] 알레르기 교차 혼입 방지</strong><br>
@@ -625,7 +635,6 @@ else:
                     master_res_df = pd.DataFrame(master_table_data)
                     st.dataframe(master_res_df, use_container_width=True, hide_index=True)
                     
-                    # 💡 완제품 알레르기 마스터 CSV 다운로드
                     csv_master = convert_df_to_csv(master_res_df)
                     st.download_button("📥 완제품 알레르기 마스터 테이블 다운로드", data=csv_master, file_name="완제품_알레르기_마스터.csv", mime="text/csv")
                 else:
