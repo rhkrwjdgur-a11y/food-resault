@@ -208,7 +208,6 @@ if not is_admin:
     # ----------------------------------------------------
     st.title("🤝 원자재 라벨 및 표시사항 다중 등록 시스템")
     
-    # 💡 멘트 수정: 시행 예정 및 선제적 파악 강조
     st.markdown("""
     <div style="background-color: #f0f7ff; padding: 15px; border-radius: 8px; border-left: 5px solid #0056b3; margin-bottom: 20px;">
     <strong>📢 [안내] 원자재 알레르기 유발물질 선제적 전수조사 및 DB화</strong><br>
@@ -217,14 +216,15 @@ if not is_admin:
     </div>
     """, unsafe_allow_html=True)
     
-    # 💡 폼 영역 밖으로 품목 개수 설정 분리 및 UI 개선
+    # 💡 제한 없는 입력칸 개수 설정
     if "item_count" not in st.session_state:
         st.session_state.item_count = 1
         
     st.markdown("### 📝 제출 품목 개수 설정")
     col_num1, col_num2, col_num3 = st.columns([3, 2, 5])
     with col_num1:
-        new_count = st.number_input("연세유업 납품 품목 개수를 적으세요 (최대 15개)", min_value=1, max_value=15, value=st.session_state.item_count)
+        # max_value 제거하여 무제한 입력 가능하게 수정
+        new_count = st.number_input("연세유업 납품 품목 개수를 적으세요 (제한 없음)", min_value=1, value=st.session_state.item_count, step=1)
     with col_num2:
         st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
         if st.button("입력칸 개수 적용 / 추가하기", type="secondary"):
