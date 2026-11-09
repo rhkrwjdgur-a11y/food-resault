@@ -30,7 +30,7 @@ MODEL_NAME = "gemini-3.6-flash"
 
 ADMIN_PASSWORD = "2082"
 
-# 💡 식품유형 마스터 데이터 (천연/합성향료 제외 및 첨가물 추가 완료)
+# 💡 식품유형 업데이트: 천연/합성향료 제거 및 신규 식품첨가물/향료 추가
 FOOD_TYPES = [
     "선택하세요 (검색 가능)", "과자류", "빵류 또는 떡류", "코코아가공품류 또는 초콜릿류", "당류", "잼류", "두부류 또는 묵류", 
     "식용유지류", "면류", "음료류", "특수용도식품", "장류", "조미식품", "절임류 또는 조림류", "농산가공품류", 
@@ -264,19 +264,16 @@ if not is_admin:
             
     st.markdown("<hr style='border:2px solid #ddd'>", unsafe_allow_html=True)
     
-    # 💡 세션 기반 데이터 저장소 활성화 (중간저장 기능)
     if "vendor_maker" not in st.session_state:
         st.session_state.vendor_maker = ""
     if "vendor_items" not in st.session_state:
-        st.session_state.vendor_items = [{} for _ in range(100)] # 넉넉히 100개 공간 확보
+        st.session_state.vendor_items = [{} for _ in range(100)]
         
-    # 콜백 함수들
     def save_maker():
         st.session_state.vendor_maker = st.session_state.maker_input
     def save_item(idx, key, val):
         st.session_state.vendor_items[idx][key] = val
         
-    # 💡 전체 초기화 함수 (중복 제출 방지 목적 포함)
     def reset_form():
         st.session_state.vendor_maker = ""
         st.session_state.vendor_items = [{} for _ in range(100)]
@@ -296,7 +293,6 @@ if not is_admin:
     for i in range(int(st.session_state.item_count)):
         st.markdown(f"#### 📌 제출 품목 {i+1}")
         
-        # 현재 항목의 세션 데이터
         current_data = st.session_state.vendor_items[i]
         
         col1, col2, col3 = st.columns([1.5, 1.5, 1])
@@ -356,10 +352,8 @@ if not is_admin:
             )
             save_item(i, 'ingredients', v_ingredients)
         
-        # 파일은 세션에 직접 저장하기 까다로우므로 업로더만 유지, 유효성 검사 시 실시간 값을 사용
         uploaded_file = st.file_uploader("📸 원본 라벨 첨부 (PDF/JPG 필수)", type=['jpg', 'jpeg', 'png', 'pdf'], key=f"file_{i}")
         
-        # 제출용 데이터 수집
         items_data.append({
             "name": v_name, "type": v_type, "maker": v_maker_global, "origin": v_origin,
             "old_allergy": v_old_allergy, "new_allergy": v_new_allergy,
@@ -405,7 +399,6 @@ if not is_admin:
                 error_found = True
                 
         if not error_found:
-            # 💡 실시간 진행 상태바 적용
             progress_bar = st.progress(0)
             status_text = st.empty()
             
@@ -444,7 +437,6 @@ if not is_admin:
             
             if success_count == total:
                 st.success(f"🎉 총 {success_count}건의 품목 전체가 성공적으로 제출되었습니다! 협조해 주셔서 감사합니다.")
-                # 💡 중복 제출 방지를 위한 폼 완전 리셋
                 reset_form() 
                 st.balloons()
             elif success_count > 0:
@@ -624,14 +616,14 @@ else:
             approved_df['기존알레르기'] = approved_df['기존알레르기'].apply(clean_allergen_text)
             approved_df['신규알레르기'] = approved_df['신규알레르기'].apply(clean_allergen_text).apply(highlight_new_allergens)
             
-            def make_link(file_id):
+            def make_link(name, file_id):
                 if file_id:
-                    return f'<a href="https://drive.google.com/uc?export=download&id={file_id}" target="_blank">📄 라벨보기</a>'
-                return "-"
+                    return f'<a href="https://drive.google.com/uc?export=download&id={file_id}" target="_blank" style="text-decoration: underline; color: #0056b3; font-weight: bold;">{name}</a>'
+                return name
                 
-            approved_df['원본다운로드'] = approved_df['파일ID'].apply(make_link)
+            approved_df['제품명(클릭 시 라벨오픈)'] = approved_df.apply(lambda row: make_link(row['제품명'], row['파일ID']), axis=1)
             
-            display_cols = ['코드', '제품명', '식품유형', '원산지', '원재료명(한글표시사항)', '제조원', '기존알레르기', '신규알레르기', '원본다운로드']
+            display_cols = ['코드', '제품명(클릭 시 라벨오픈)', '식품유형', '원산지', '원재료명(한글표시사항)', '제조원', '기존알레르기', '신규알레르기']
             
             st.markdown(
                 """
@@ -673,7 +665,7 @@ else:
                 if search_query:
                     raw_df = raw_df[raw_df['제품명'].astype(str).str.contains(pattern, regex=True, na=False) | raw_df['코드'].astype(str).str.contains(pattern, regex=True, na=False)]
                 
-                dl_cols = [c for c in display_cols if c != '원본다운로드']
+                dl_cols = ['코드', '제품명', '식품유형', '원산지', '원재료명(한글표시사항)', '제조원', '기존알레르기', '신규알레르기']
                 csv = convert_df_to_csv(raw_df[dl_cols])
                 st.download_button(
                     label="📥 검색 결과 엑셀(CSV) 다운로드",
