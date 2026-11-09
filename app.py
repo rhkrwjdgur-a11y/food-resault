@@ -294,7 +294,8 @@ if not is_admin:
         
         current_data = st.session_state.vendor_items[i]
         
-        col1, col2, col3 = st.columns([1.5, 1.5, 1])
+        # 💡 원산지 입력칸을 화면에서 제거하고, 2열 구조로 변경
+        col1, col2 = st.columns(2)
         with col1:
             v_name = st.text_input(
                 "🏷️ 제품명 (라벨 표기 기준, 필수)", 
@@ -316,13 +317,8 @@ if not is_admin:
             )
             save_item(i, 'type', v_type)
             
-        with col3:
-            v_origin = st.text_input(
-                "🌍 원산지", 
-                value=current_data.get('origin', ''),
-                key=f"origin_{i}"
-            )
-            save_item(i, 'origin', v_origin)
+        # 💡 백엔드 전송 및 DB 호환을 위해 값은 빈칸으로 유지
+        v_origin = ""
             
         col4, col5 = st.columns([2, 2])
         with col4:
@@ -514,6 +510,7 @@ else:
                             edit_maker = st.text_input("제조원", value=row.get('제조원'), key=f"e_maker_{excel_row_idx}")
                             edit_name = st.text_input("제품명", value=row.get('제품명'), key=f"e_name_{excel_row_idx}")
                             edit_type = st.text_input("식품유형", value=row.get('식품유형'), key=f"e_type_{excel_row_idx}")
+                            # 💡 관리자 화면에서는 원산지 입력칸을 그대로 유지하여 교차검증 시 사용 가능
                             edit_origin = st.text_input("원산지", value=row.get('원산지'), key=f"e_origin_{excel_row_idx}")
                             edit_old = st.text_input("기존 알레르기", value=row.get('기존알레르기'), key=f"e_old_{excel_row_idx}")
                             edit_new = st.text_input("신규 알레르기", value=row.get('신규알레르기'), key=f"e_new_{excel_row_idx}")
@@ -615,14 +612,13 @@ else:
             approved_df['기존알레르기'] = approved_df['기존알레르기'].apply(clean_allergen_text)
             approved_df['신규알레르기'] = approved_df['신규알레르기'].apply(clean_allergen_text).apply(highlight_new_allergens)
             
-            # 💡 [핵심] 제품명 클릭 시 라벨 원본이 열리도록 a 태그 설정
-            def make_name_button(name, img_url):
-                if pd.isna(img_url) or not str(img_url).startswith('http'):
-                    return name
-                return f'<a href="{img_url}" target="_blank" style="text-decoration: underline; color: #0056b3; font-weight: bold;">{name}</a>'
-
-            approved_df['제품명(클릭 시 라벨오픈)'] = approved_df.apply(lambda row: make_name_button(row['제품명'], row['이미지링크']), axis=1)
-
+            def make_link(name, file_id):
+                if file_id:
+                    return f'<a href="https://drive.google.com/uc?export=download&id={file_id}" target="_blank" style="text-decoration: underline; color: #0056b3; font-weight: bold;">{name}</a>'
+                return name
+                
+            approved_df['제품명(클릭 시 라벨오픈)'] = approved_df.apply(lambda row: make_link(row['제품명'], row['파일ID']), axis=1)
+            
             display_cols = ['코드', '제품명(클릭 시 라벨오픈)', '식품유형', '원산지', '원재료명(한글표시사항)', '제조원', '기존알레르기', '신규알레르기']
             
             st.markdown(
