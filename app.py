@@ -30,7 +30,6 @@ MODEL_NAME = "gemini-3.8-flash"
 
 ADMIN_PASSWORD = "2082"
 
-# 💡 식품유형 업데이트: 천연/합성향료 제거 및 신규 식품첨가물/향료 추가
 FOOD_TYPES = [
     "선택하세요 (검색 가능)", "과자류", "빵류 또는 떡류", "코코아가공품류 또는 초콜릿류", "당류", "잼류", "두부류 또는 묵류", 
     "식용유지류", "면류", "음료류", "특수용도식품", "장류", "조미식품", "절임류 또는 조림류", "농산가공품류", 
@@ -616,13 +615,14 @@ else:
             approved_df['기존알레르기'] = approved_df['기존알레르기'].apply(clean_allergen_text)
             approved_df['신규알레르기'] = approved_df['신규알레르기'].apply(clean_allergen_text).apply(highlight_new_allergens)
             
-            def make_link(name, file_id):
-                if file_id:
-                    return f'<a href="https://drive.google.com/uc?export=download&id={file_id}" target="_blank" style="text-decoration: underline; color: #0056b3; font-weight: bold;">{name}</a>'
-                return name
-                
-            approved_df['제품명(클릭 시 라벨오픈)'] = approved_df.apply(lambda row: make_link(row['제품명'], row['파일ID']), axis=1)
-            
+            # 💡 [핵심] 제품명 클릭 시 라벨 원본이 열리도록 a 태그 설정
+            def make_name_button(name, img_url):
+                if pd.isna(img_url) or not str(img_url).startswith('http'):
+                    return name
+                return f'<a href="{img_url}" target="_blank" style="text-decoration: underline; color: #0056b3; font-weight: bold;">{name}</a>'
+
+            approved_df['제품명(클릭 시 라벨오픈)'] = approved_df.apply(lambda row: make_name_button(row['제품명'], row['이미지링크']), axis=1)
+
             display_cols = ['코드', '제품명(클릭 시 라벨오픈)', '식품유형', '원산지', '원재료명(한글표시사항)', '제조원', '기존알레르기', '신규알레르기']
             
             st.markdown(
