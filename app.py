@@ -193,7 +193,6 @@ def render_inline_viewer(img_url):
 def convert_df_to_csv(df):
     return df.to_csv(index=False).encode('utf-8-sig')
 
-# 💡 '검증결과'에서 [합격] 또는 [불합격] 키워드만 추출하는 포맷터 함수 추가
 def format_audit_result(text):
     text_str = str(text)
     if "[합격]" in text_str:
@@ -475,23 +474,34 @@ else:
                     approved_df['코드'].astype(str).str.contains(pattern, regex=True, na=False)
                 ]
             
-            # 💡 기존 알레르기 컬럼 추가 및 검증결과 간소화 
             display_cols = ['코드', '제품명', '식품유형', '원재료명(한글표시사항)', '제조원', '기존알레르기', '신규알레르기', '검증결과']
             approved_df['검증결과'] = approved_df['검증결과'].apply(format_audit_result)
             
-            # 💡 st.data_editor의 column_config를 이용한 텍스트 줄바꿈(자동 높이 조절) 지원
-            st.data_editor(
-                approved_df[display_cols],
-                use_container_width=True,
-                hide_index=True,
-                disabled=True, 
-                column_config={
-                    "원재료명(한글표시사항)": st.column_config.TextColumn(
-                        "원재료명(한글표시사항)",
-                        width="large",
-                    )
+            # 💡 [핵심] HTML 테이블 렌더링 방식 적용 (텍스트 길이 무관 100% 노출)
+            st.markdown(
+                """
+                <style>
+                .custom-table {
+                    width: 100%;
+                    border-collapse: collapse;
+                    font-size: 14px;
+                    margin-bottom: 20px;
                 }
+                .custom-table th, .custom-table td {
+                    border: 1px solid #ddd;
+                    padding: 8px;
+                    text-align: left;
+                    vertical-align: top;
+                }
+                .custom-table th {
+                    background-color: #f2f2f2;
+                    font-weight: bold;
+                }
+                </style>
+                """, unsafe_allow_html=True
             )
+            html_table = approved_df[display_cols].to_html(classes="custom-table", index=False, escape=False)
+            st.markdown(html_table, unsafe_allow_html=True)
             
             if not approved_df.empty:
                 csv = convert_df_to_csv(approved_df[display_cols])
