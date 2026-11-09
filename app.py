@@ -26,7 +26,7 @@ except KeyError as e:
     st.stop()
 
 genai.configure(api_key=GEMINI_API_KEY)
-MODEL_NAME = "gemini-3.6-flash"
+MODEL_NAME = "gemini-3.8-flash"
 
 ADMIN_PASSWORD = "2082"
 
