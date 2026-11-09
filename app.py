@@ -106,15 +106,23 @@ def append_data_to_sheet(row_data):
     except Exception as e:
         return str(e)
 
-def approve_and_update_row(row_index_str, final_code, status_text, result_text):
+# 단일 값 업데이트가 아닌, 여러 컬럼을 동시에 업데이트하는 함수
+def update_row_data(row_index_str, update_dict):
     try:
         creds = get_google_creds()
         gc = gspread.authorize(creds)
         sh = gc.open_by_key(SHEET_ID)
         worksheet = sh.sheet1
-        worksheet.update_acell(f'A{row_index_str}', final_code)
-        worksheet.update_acell(f'L{row_index_str}', status_text)
-        worksheet.update_acell(f'M{row_index_str}', result_text)
+        
+        col_map = {
+            '코드': 'A', '제품명': 'B', '식품유형': 'C', '원재료명(한글표시사항)': 'D',
+            '원산지': 'E', '제조원': 'F', '기존알레르기': 'G', '신규알레르기': 'H',
+            '검증상태': 'L', '검증결과': 'M'
+        }
+        
+        for key, val in update_dict.items():
+            if key in col_map:
+                worksheet.update_acell(f'{col_map[key]}{row_index_str}', str(val))
         return True
     except Exception as e:
         return str(e)
@@ -152,7 +160,7 @@ def load_master_data():
         return pd.DataFrame()
 
 # ==========================================
-# 3. AI 교차 검증 및 공용 헬퍼 함수
+# 3. 공용 헬퍼 함수
 # ==========================================
 def verify_with_ai(file_bytes, mime_type, vendor_data, master_data_json):
     prompt = f"""
@@ -186,7 +194,8 @@ def render_inline_viewer(img_url):
     if match:
         file_id = match.group(1)
         iframe_src = f"https://drive.google.com/file/d/{file_id}/preview"
-        components.iframe(iframe_src, height=600, scrolling=True)
+        # 💡 좌우 분할 시 이미지가 넉넉히 보이도록 높이를 800으로 확대
+        components.iframe(iframe_src, height=800, scrolling=True)
     else:
         st.markdown(f"[링크 직접 열기]({img_url})")
 
@@ -200,6 +209,24 @@ def format_audit_result(text):
     elif "[불합격]" in text_str:
         return "🔴 불합격"
     return text_str
+
+# 💡 '해당없음'을 짝대기(-)로 치환하고 다른 이모지도 제거하는 함수
+def clean_allergen_text(text):
+    text = str(text).replace("🟩 해당없음 (안전)", "-").strip()
+    text = re.sub(r'[⚠️🚨]', '', text).strip()
+    if not text:
+        return "-"
+    return text
+
+# 💡 신규 알레르기(4종) 적발 시 빨간색 강조 박스를 씌우는 함수
+def highlight_new_allergens(text):
+    text = str(text)
+    targets = ["참깨", "들깨", "아몬드", "캐슈넛"]
+    has_target = any(t in text for t in targets)
+    
+    if has_target:
+        return f'<span style="background-color: #ffcccc; color: #cc0000; padding: 2px 6px; border-radius: 4px; font-weight: bold;">{text}</span>'
+    return text
 
 # ==========================================
 # 4. 화면 라우팅 (관리자 vs 협력업체)
@@ -380,8 +407,8 @@ else:
 
     # ------------------ [탭 2: AI 검증 및 승인] ------------------
     with admin_tab2:
-        st.markdown("### 🤖 대기열 검증 및 마스터 코드 확정")
-        st.caption("AI가 원본 라벨을 대조하고, 사내 마스터 명단에서 가장 일치하는 원자재 코드를 추천합니다. 관리자가 최종 승인하면 DB에 코드가 부여됩니다.")
+        st.markdown("### 🤖 대기열 검증 및 마스터 코드 확정 (인라인 수정 모드)")
+        st.caption("좌측의 폼에서 오타를 직접 수정한 후 승인할 수 있으며, 우측의 라벨 이미지와 실시간으로 대조 가능합니다.")
         
         if not df.empty:
             pending_df = df[df['검증상태'] == '대기중'].reset_index()
@@ -396,23 +423,37 @@ else:
                     name = row.get('제품명', '')
                     file_id = row.get('파일ID', '')
                     submit_time = row.get('제출일시', '')
+                    img_url = row.get('이미지링크', '')
                     
-                    with st.expander(f"📦 [대기중] {name} - ({submit_time})"):
-                        col_a, col_b = st.columns(2)
-                        with col_a:
-                            st.markdown("**[업체 제출 정보]**")
-                            st.write(f"- **제조원**: {row.get('제조원')}")
-                            st.write(f"- **제품명**: {row.get('제품명')} ({row.get('식품유형')})")
-                            st.write(f"- **원재료명**: {row.get('원재료명(한글표시사항)')}")
-                            st.write(f"- **기존/신규 알레르기**: {row.get('기존알레르기')} / {row.get('신규알레르기')}")
+                    with st.expander(f"📦 [대기중] {name} - ({submit_time})", expanded=False):
+                        # 💡 레이아웃 좌우 4:6 분할 적용
+                        col_left, col_right = st.columns([4, 6])
+                        
+                        with col_left:
+                            st.markdown("#### 📝 제출 데이터 (수정 가능)")
                             
-                        with col_b:
+                            # 💡 폼 형태 인라인 수정
+                            edit_maker = st.text_input("제조원", value=row.get('제조원'), key=f"e_maker_{excel_row_idx}")
+                            edit_name = st.text_input("제품명", value=row.get('제품명'), key=f"e_name_{excel_row_idx}")
+                            edit_type = st.text_input("식품유형", value=row.get('식품유형'), key=f"e_type_{excel_row_idx}")
+                            edit_origin = st.text_input("원산지", value=row.get('원산지'), key=f"e_origin_{excel_row_idx}")
+                            edit_old = st.text_input("기존 알레르기", value=row.get('기존알레르기'), key=f"e_old_{excel_row_idx}")
+                            edit_new = st.text_input("신규 알레르기", value=row.get('신규알레르기'), key=f"e_new_{excel_row_idx}")
+                            edit_ing = st.text_area("원재료명(한글표시사항)", value=row.get('원재료명(한글표시사항)'), height=150, key=f"e_ing_{excel_row_idx}")
+                            
                             if st.button(f"🔍 AI 교차검증 및 매칭 분석", key=f"btn_ai_{excel_row_idx}"):
                                 if file_id:
                                     with st.spinner("드라이브 라벨 분석 및 마스터 코드 매칭 중..."):
                                         f_bytes, mime = download_file_from_drive(file_id)
                                         if f_bytes:
-                                            result = verify_with_ai(f_bytes, mime, row.to_dict(), master_json)
+                                            updated_vendor_data = {
+                                                '제품명': edit_name,
+                                                '원재료명(한글표시사항)': edit_ing,
+                                                '제조원': edit_maker,
+                                                '기존알레르기': edit_old,
+                                                '신규알레르기': edit_new
+                                            }
+                                            result = verify_with_ai(f_bytes, mime, updated_vendor_data, master_json)
                                             
                                             match_code = "없음"
                                             for line in result.split('\n'):
@@ -429,31 +470,51 @@ else:
                             
                             if f"ai_result_{excel_row_idx}" in st.session_state:
                                 st.markdown("### 📋 AI 판독 및 매칭 결과")
-                                st.info(st.session_state[f"ai_result_{excel_row_idx}"])
+                                ai_result_text = st.session_state[f"ai_result_{excel_row_idx}"]
+                                
+                                # 💡 불합격 시 빨간색 강조 적용
+                                if "[불합격]" in ai_result_text:
+                                    st.markdown(f'<div style="background-color: #ffcccc; padding: 10px; border-radius: 5px; color: #cc0000; font-weight: bold;">{ai_result_text}</div>', unsafe_allow_html=True)
+                                else:
+                                    st.info(ai_result_text)
                                 
                                 st.markdown("---")
                                 final_code = st.text_input(
-                                    "최종 매핑할 '원자재 코드' 입력 (AI 추천 코드가 자동 기입됨):", 
+                                    "최종 매핑할 '원자재 코드' 입력:", 
                                     value=st.session_state[f"rec_code_{excel_row_idx}"], 
                                     key=f"final_code_{excel_row_idx}"
                                 )
                                 
-                                if st.button(f"✅ 코드 '{final_code}'로 최종 승인 및 DB 저장", type="primary", key=f"btn_approve_{excel_row_idx}"):
+                                if st.button(f"✅ 코드 '{final_code}' 승인 및 수정사항 전체 DB 저장", type="primary", key=f"btn_approve_{excel_row_idx}"):
                                     if final_code and final_code != "없음":
                                         ai_full_text = st.session_state[f"ai_result_{excel_row_idx}"]
-                                        res = approve_and_update_row(excel_row_idx, final_code, "승인완료", ai_full_text)
+                                        update_dict = {
+                                            '코드': final_code,
+                                            '제품명': edit_name,
+                                            '식품유형': edit_type,
+                                            '원재료명(한글표시사항)': edit_ing,
+                                            '원산지': edit_origin,
+                                            '제조원': edit_maker,
+                                            '기존알레르기': edit_old,
+                                            '신규알레르기': edit_new,
+                                            '검증상태': '승인완료',
+                                            '검증결과': ai_full_text
+                                        }
+                                        res = update_row_data(excel_row_idx, update_dict)
                                         
                                         if res == True:
-                                            st.success("데이터베이스에 코드가 정상 확정되었습니다! (새로고침 시 대기열에서 사라집니다)")
+                                            st.success("데이터베이스에 코드 및 수정 내용이 정상 확정되었습니다! (새로고침 요망)")
                                         else:
                                             st.error(f"저장 에러: {res}")
                                     else:
                                         st.error("유효한 원자재 코드를 입력해야 승인할 수 있습니다.")
                         
-                        st.markdown("---")
-                        img_url = row.get('이미지링크', '')
-                        if img_url:
-                            render_inline_viewer(img_url)
+                        with col_right:
+                            st.markdown("#### 🖼️ 첨부 라벨 원본 뷰어")
+                            if img_url and str(img_url).startswith('http'):
+                                render_inline_viewer(img_url)
+                            else:
+                                st.warning("라벨 이미지가 없습니다.")
         else:
             st.info("등록된 데이터가 없습니다.")
 
@@ -474,10 +535,13 @@ else:
                     approved_df['코드'].astype(str).str.contains(pattern, regex=True, na=False)
                 ]
             
-            display_cols = ['코드', '제품명', '식품유형', '원재료명(한글표시사항)', '제조원', '기존알레르기', '신규알레르기', '검증결과']
+            # 💡 기호 클렌징 및 하이라이트 적용
+            approved_df['기존알레르기'] = approved_df['기존알레르기'].apply(clean_allergen_text)
+            approved_df['신규알레르기'] = approved_df['신규알레르기'].apply(clean_allergen_text).apply(highlight_new_allergens)
             approved_df['검증결과'] = approved_df['검증결과'].apply(format_audit_result)
             
-            # 💡 [핵심] HTML 테이블 렌더링 방식 적용 (텍스트 길이 무관 100% 노출)
+            display_cols = ['코드', '제품명', '식품유형', '원재료명(한글표시사항)', '제조원', '기존알레르기', '신규알레르기', '검증결과']
+            
             st.markdown(
                 """
                 <style>
@@ -504,7 +568,12 @@ else:
             st.markdown(html_table, unsafe_allow_html=True)
             
             if not approved_df.empty:
-                csv = convert_df_to_csv(approved_df[display_cols])
+                # 💡 다운로드용 데이터는 하이라이트 태그 제거 원본 사용
+                raw_df = df[df['검증상태'] == '승인완료'].copy()
+                if search_query:
+                    raw_df = raw_df[raw_df['제품명'].astype(str).str.contains(pattern, regex=True, na=False) | raw_df['코드'].astype(str).str.contains(pattern, regex=True, na=False)]
+                
+                csv = convert_df_to_csv(raw_df[display_cols])
                 st.download_button(
                     label="📥 검색 결과 엑셀(CSV) 다운로드",
                     data=csv,
