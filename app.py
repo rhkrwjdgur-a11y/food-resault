@@ -106,7 +106,6 @@ def append_data_to_sheet(row_data):
     except Exception as e:
         return str(e)
 
-# 단일 값 업데이트가 아닌, 여러 컬럼을 동시에 업데이트하는 함수
 def update_row_data(row_index_str, update_dict):
     try:
         creds = get_google_creds()
@@ -194,7 +193,6 @@ def render_inline_viewer(img_url):
     if match:
         file_id = match.group(1)
         iframe_src = f"https://drive.google.com/file/d/{file_id}/preview"
-        # 💡 좌우 분할 시 이미지가 넉넉히 보이도록 높이를 800으로 확대
         components.iframe(iframe_src, height=800, scrolling=True)
     else:
         st.markdown(f"[링크 직접 열기]({img_url})")
@@ -210,7 +208,6 @@ def format_audit_result(text):
         return "🔴 불합격"
     return text_str
 
-# 💡 '해당없음'을 짝대기(-)로 치환하고 다른 이모지도 제거하는 함수
 def clean_allergen_text(text):
     text = str(text).replace("🟩 해당없음 (안전)", "-").strip()
     text = re.sub(r'[⚠️🚨]', '', text).strip()
@@ -218,7 +215,6 @@ def clean_allergen_text(text):
         return "-"
     return text
 
-# 💡 신규 알레르기(4종) 적발 시 빨간색 강조 박스를 씌우는 함수
 def highlight_new_allergens(text):
     text = str(text)
     targets = ["참깨", "들깨", "아몬드", "캐슈넛"]
@@ -426,13 +422,11 @@ else:
                     img_url = row.get('이미지링크', '')
                     
                     with st.expander(f"📦 [대기중] {name} - ({submit_time})", expanded=False):
-                        # 💡 레이아웃 좌우 4:6 분할 적용
                         col_left, col_right = st.columns([4, 6])
                         
                         with col_left:
                             st.markdown("#### 📝 제출 데이터 (수정 가능)")
                             
-                            # 💡 폼 형태 인라인 수정
                             edit_maker = st.text_input("제조원", value=row.get('제조원'), key=f"e_maker_{excel_row_idx}")
                             edit_name = st.text_input("제품명", value=row.get('제품명'), key=f"e_name_{excel_row_idx}")
                             edit_type = st.text_input("식품유형", value=row.get('식품유형'), key=f"e_type_{excel_row_idx}")
@@ -472,7 +466,6 @@ else:
                                 st.markdown("### 📋 AI 판독 및 매칭 결과")
                                 ai_result_text = st.session_state[f"ai_result_{excel_row_idx}"]
                                 
-                                # 💡 불합격 시 빨간색 강조 적용
                                 if "[불합격]" in ai_result_text:
                                     st.markdown(f'<div style="background-color: #ffcccc; padding: 10px; border-radius: 5px; color: #cc0000; font-weight: bold;">{ai_result_text}</div>', unsafe_allow_html=True)
                                 else:
@@ -535,12 +528,11 @@ else:
                     approved_df['코드'].astype(str).str.contains(pattern, regex=True, na=False)
                 ]
             
-            # 💡 기호 클렌징 및 하이라이트 적용
             approved_df['기존알레르기'] = approved_df['기존알레르기'].apply(clean_allergen_text)
             approved_df['신규알레르기'] = approved_df['신규알레르기'].apply(clean_allergen_text).apply(highlight_new_allergens)
-            approved_df['검증결과'] = approved_df['검증결과'].apply(format_audit_result)
             
-            display_cols = ['코드', '제품명', '식품유형', '원재료명(한글표시사항)', '제조원', '기존알레르기', '신규알레르기', '검증결과']
+            # 원산지 추가 및 검증결과 제거
+            display_cols = ['코드', '제품명', '식품유형', '원산지', '원재료명(한글표시사항)', '제조원', '기존알레르기', '신규알레르기']
             
             st.markdown(
                 """
@@ -568,7 +560,6 @@ else:
             st.markdown(html_table, unsafe_allow_html=True)
             
             if not approved_df.empty:
-                # 💡 다운로드용 데이터는 하이라이트 태그 제거 원본 사용
                 raw_df = df[df['검증상태'] == '승인완료'].copy()
                 if search_query:
                     raw_df = raw_df[raw_df['제품명'].astype(str).str.contains(pattern, regex=True, na=False) | raw_df['코드'].astype(str).str.contains(pattern, regex=True, na=False)]
@@ -583,17 +574,24 @@ else:
                 
                 st.markdown("---")
                 st.markdown("#### 🖼️ 선택 원자재 라벨 직접 확인 및 원본 다운로드")
-                for idx, row in approved_df.iterrows():
-                    product_name = row.get('제품명', '이름 없음')
-                    img_url = row.get('이미지링크', '')
-                    file_id = row.get('파일ID', '')
+                
+                # 리스트가 길어질 경우를 대비한 드롭다운(Selectbox) 방식 적용
+                selected_product = st.selectbox(
+                    "확인할 원자재를 선택하세요:",
+                    options=approved_df['제품명'].tolist(),
+                    format_func=lambda x: f"{x} (라벨 원본 뷰어 열기)"
+                )
+                
+                if selected_product:
+                    selected_row = approved_df[approved_df['제품명'] == selected_product].iloc[0]
+                    img_url = selected_row.get('이미지링크', '')
+                    file_id = selected_row.get('파일ID', '')
                     
                     if img_url and str(img_url).startswith('http'):
-                        with st.expander(f"📄 [{product_name}] 라벨 문서 보기 및 다운로드"):
-                            render_inline_viewer(img_url)
-                            if file_id:
-                                download_url = f"https://drive.google.com/uc?export=download&id={file_id}"
-                                st.markdown(f"[💾 라벨 원본 파일 다운로드 (클릭 시 새 창에서 다운로드)]({download_url})")
+                        render_inline_viewer(img_url)
+                        if file_id:
+                            download_url = f"https://drive.google.com/uc?export=download&id={file_id}"
+                            st.markdown(f"[💾 라벨 원본 파일 다운로드 (클릭 시 새 창에서 다운로드)]({download_url})")
         else:
             st.info("데이터가 없습니다.")
 
