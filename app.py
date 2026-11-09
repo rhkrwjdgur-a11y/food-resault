@@ -193,6 +193,15 @@ def render_inline_viewer(img_url):
 def convert_df_to_csv(df):
     return df.to_csv(index=False).encode('utf-8-sig')
 
+# 💡 '검증결과'에서 [합격] 또는 [불합격] 키워드만 추출하는 포맷터 함수 추가
+def format_audit_result(text):
+    text_str = str(text)
+    if "[합격]" in text_str:
+        return "🟢 합격"
+    elif "[불합격]" in text_str:
+        return "🔴 불합격"
+    return text_str
+
 # ==========================================
 # 4. 화면 라우팅 (관리자 vs 협력업체)
 # ==========================================
@@ -216,14 +225,12 @@ if not is_admin:
     </div>
     """, unsafe_allow_html=True)
     
-    # 💡 제한 없는 입력칸 개수 설정
     if "item_count" not in st.session_state:
         st.session_state.item_count = 1
         
     st.markdown("### 📝 제출 품목 개수 설정")
     col_num1, col_num2, col_num3 = st.columns([3, 2, 5])
     with col_num1:
-        # max_value 제거하여 무제한 입력 가능하게 수정
         new_count = st.number_input("연세유업 납품 품목 개수를 적으세요 (제한 없음)", min_value=1, value=st.session_state.item_count, step=1)
     with col_num2:
         st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
@@ -468,8 +475,23 @@ else:
                     approved_df['코드'].astype(str).str.contains(pattern, regex=True, na=False)
                 ]
             
-            display_cols = ['코드', '제품명', '식품유형', '원재료명(한글표시사항)', '제조원', '신규알레르기', '검증결과']
-            st.dataframe(approved_df[display_cols], use_container_width=True, hide_index=True)
+            # 💡 기존 알레르기 컬럼 추가 및 검증결과 간소화 
+            display_cols = ['코드', '제품명', '식품유형', '원재료명(한글표시사항)', '제조원', '기존알레르기', '신규알레르기', '검증결과']
+            approved_df['검증결과'] = approved_df['검증결과'].apply(format_audit_result)
+            
+            # 💡 st.data_editor의 column_config를 이용한 텍스트 줄바꿈(자동 높이 조절) 지원
+            st.data_editor(
+                approved_df[display_cols],
+                use_container_width=True,
+                hide_index=True,
+                disabled=True, 
+                column_config={
+                    "원재료명(한글표시사항)": st.column_config.TextColumn(
+                        "원재료명(한글표시사항)",
+                        width="large",
+                    )
+                }
+            )
             
             if not approved_df.empty:
                 csv = convert_df_to_csv(approved_df[display_cols])
