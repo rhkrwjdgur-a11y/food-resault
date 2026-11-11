@@ -212,6 +212,12 @@ def append_data_to_sheet(row_data):
         gc = gspread.authorize(creds)
         sh = gc.open_by_key(SHEET_ID)
         worksheet = sh.sheet1
+        
+        # N열(14번째 열)에 '판매원' 헤더가 없으면 자동 추가하여 기존 A~M열 구조 유지
+        headers = worksheet.row_values(1)
+        if len(headers) < 14:
+            worksheet.update_acell('N1', '판매원')
+            
         worksheet.append_row(row_data)
         return True
     except Exception as e:
@@ -224,10 +230,14 @@ def update_row_data(row_index_str, update_dict):
         sh = gc.open_by_key(SHEET_ID)
         worksheet = sh.sheet1
         
+        headers = worksheet.row_values(1)
+        if len(headers) < 14:
+            worksheet.update_acell('N1', '판매원')
+        
         col_map = {
             '코드': 'A', '제품명': 'B', '식품유형': 'C', '원재료명(한글표시사항)': 'D',
             '원산지': 'E', '제조원': 'F', '기존알레르기': 'G', '신규알레르기': 'H',
-            '검증상태': 'L', '검증결과': 'M'
+            '검증상태': 'L', '검증결과': 'M', '판매원': 'N'
         }
         
         for key, val in update_dict.items():
@@ -279,11 +289,11 @@ def verify_with_ai(file_bytes, mime_type, vendor_data, master_data_json):
 
     [작업 1: 교차 검증]
     업체가 입력한 데이터와 첨부된 라벨 문서(이미지/PDF)를 정밀하게 비교하세요.
-    - 업체 데이터: 제품명({vendor_data['제품명']}), 원재료명({vendor_data['원재료명(한글표시사항)']}), 기존알레르기({vendor_data['기존알레르기']}), 신규알레르기({vendor_data['신규알레르기']})
+    - 업체 데이터: 제품명({vendor_data['제품명']}), 납품업체/판매원({vendor_data.get('판매원', '')}), 제조원({vendor_data['제조원']}), 원재료명({vendor_data['원재료명(한글표시사항)']}), 기존알레르기({vendor_data['기존알레르기']}), 신규알레르기({vendor_data['신규알레르기']})
     - 라벨 원본에 숨어있는 알레르기 성분(특히 신규 알레르기: 참깨, 들깨, 아몬드, 캐슈넛) 누락 여부를 집중 점검하세요.
 
     [작업 2: 마스터 코드 매칭]
-    아래 제공된 '사내 전체 원자재 명단'을 바탕으로, 업체가 제출한 [제품명({vendor_data['제품명']})] 및 [제조원({vendor_data['제조원']})]과 텍스트 유사도(띄어쓰기, 축약어, 공장명 포함)가 가장 높은 원자재 코드를 하나 찾아 추천하세요.
+    아래 제공된 '사내 전체 원자재 명단'을 바탕으로, 업체가 제출한 [제품명({vendor_data['제품명']})], [납품업체/판매원({vendor_data.get('판매원', '')})], [제조원({vendor_data['제조원']})]과 텍스트 유사도(띄어쓰기, 축약어, 공장명 포함)가 가장 높은 원자재 코드를 하나 찾아 추천하세요.
     - 사내 원자재 명단(JSON): {master_data_json}
 
     [출력 형식] (반드시 아래 양식을 지켜 순수 텍스트로만 출력하세요)
@@ -388,9 +398,10 @@ if not is_admin:
         st.session_state.vendor_items = [{} for _ in range(100)]
         st.session_state.item_count = 1
         
-    st.markdown("### 🏢 납품업체(제조원) 정보")
-    v_maker_global = st.text_input(
-        "납품하시는 업체명(제조원 또는 판매원)을 적어주세요 (사업자등록증 기준 필수 기재)",
+    st.markdown("### 🏢 납품업체(판매원) 정보")
+    st.caption("💡 연세유업에 원료를 직접 납품하시는 업체명(판매원·유통사·수입사 또는 직접 제조·납품업체)을 사업자등록증 기준으로 기재해 주세요.")
+    v_vendor_global = st.text_input(
+        "납품하시는 업체명(판매원)을 적어주세요 (사업자등록증 기준 필수 기재)",
         value=st.session_state.vendor_maker,
         key="maker_input",
         on_change=save_maker
@@ -404,7 +415,7 @@ if not is_admin:
         
         current_data = st.session_state.vendor_items[i]
         
-        # 💡 원산지 입력칸을 화면에서 제거하고, 2열 구조로 변경
+        # 1열: 제품명 및 식품유형 (원산지 입력칸 제거 유지)
         col1, col2 = st.columns(2)
         with col1:
             v_name = st.text_input(
@@ -427,9 +438,49 @@ if not is_admin:
             )
             save_item(i, 'type', v_type)
             
-        # 💡 백엔드 전송 및 DB 호환을 위해 값은 빈칸으로 유지
+        # 2열: 품목별 제조원 및 '판매원과 동일' 체크박스 + 우측 설명란
+        col_m1, col_m2 = st.columns([2, 2])
+        with col_m1:
+            same_as_vendor = st.checkbox(
+                "✅ 제조원과 판매원(납품업체)이 동일한 경우 체크해주세요",
+                value=current_data.get('same_maker', False),
+                key=f"same_maker_{i}"
+            )
+            save_item(i, 'same_maker', same_as_vendor)
+            
+            if same_as_vendor:
+                v_item_maker = v_vendor_global
+                st.text_input(
+                    "🏭 제조원 (판매원과 동일 자동적용)",
+                    value=v_vendor_global,
+                    disabled=True,
+                    key=f"maker_disabled_{i}"
+                )
+            else:
+                v_item_maker = st.text_input(
+                    "🏭 제조원 (라벨 표기 기준 실제 제조원, 필수)",
+                    value=current_data.get('item_maker', ''),
+                    placeholder="한글표시사항(라벨)에 표기된 실제 제조원(생산공장/해외제조사 등)을 기재하세요",
+                    key=f"item_maker_{i}"
+                )
+            save_item(i, 'item_maker', v_item_maker)
+            
+        with col_m2:
+            st.markdown(
+                """
+                <div style="background-color: #f8f9fa; padding: 12px 15px; border-radius: 6px; border-left: 4px solid #0056b3; margin-top: 10px; font-size: 13.5px; color: #333; line-height: 1.5;">
+                <strong>💡 제조원 작성 안내</strong><br>
+                • <strong>제조원과 판매원이 동일한 경우:</strong> 좌측 체크박스를 체크하시면 상단의 납품업체(판매원)명이 자동 입력됩니다.<br>
+                • <strong>수입 원료 또는 타사 제조품을 납품하시는 경우:</strong> 체크하지 마시고 라벨에 표기된 <strong>실제 제조원명</strong>을 직접 기재해 주세요.
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+            
+        # 백엔드 전송 및 DB 호환을 위해 원산지 값은 빈칸으로 유지
         v_origin = ""
             
+        # 3열: 기존/신규 알레르기 및 원재료명
         col4, col5 = st.columns([2, 2])
         with col4:
             v_old_allergy = st.multiselect(
@@ -460,7 +511,7 @@ if not is_admin:
         uploaded_file = st.file_uploader("📸 원본 라벨 첨부 (PDF/JPG 필수)", type=['jpg', 'jpeg', 'png', 'pdf'], key=f"file_{i}")
         
         items_data.append({
-            "name": v_name, "type": v_type, "maker": v_maker_global, "origin": v_origin,
+            "name": v_name, "type": v_type, "vendor": v_vendor_global, "maker": v_item_maker, "origin": v_origin,
             "old_allergy": v_old_allergy, "new_allergy": v_new_allergy,
             "ingredients": v_ingredients, "file": uploaded_file
         })
@@ -480,13 +531,13 @@ if not is_admin:
     if submit_btn:
         error_found = False
         
-        if not v_maker_global:
-            st.error("❌ 상단에 [납품업체명(제조원)]을 반드시 입력해 주세요.")
+        if not v_vendor_global:
+            st.error("❌ 상단에 [납품업체명(판매원)]을 반드시 입력해 주세요.")
             error_found = True
         
         for idx, item in enumerate(items_data):
-            if not item['name'] or item['type'] == "선택하세요 (검색 가능)" or not item['ingredients'] or not item['file']:
-                st.error(f"❌ [품목 {idx+1}] 필수 항목(제품명, 식품유형, 원재료명, 파일 첨부)이 누락되었습니다.")
+            if not item['name'] or item['type'] == "선택하세요 (검색 가능)" or not item['maker'] or not item['ingredients'] or not item['file']:
+                st.error(f"❌ [품목 {idx+1}] 필수 항목(제품명, 식품유형, 제조원, 원재료명, 파일 첨부)이 누락되었습니다.")
                 error_found = True
             
             if not item['old_allergy']:
@@ -524,10 +575,11 @@ if not is_admin:
                 drive_link, file_id = upload_file_to_drive(file_bytes, file_name, file_mime_type)
                 
                 if drive_link and file_id:
+                    # A~M열은 기존 순서 그대로 유지하고, N열에 납품업체(판매원) 저장
                     row_data = [
                         "", item['name'], item['type'], item['ingredients'], item['origin'], item['maker'], 
                         ", ".join(item['old_allergy']), ", ".join(item['new_allergy']), current_time, 
-                        drive_link, file_id, "대기중", "검증전"
+                        drive_link, file_id, "대기중", "검증전", item['vendor']
                     ]
                     res = append_data_to_sheet(row_data)
                     if res == True:
@@ -568,7 +620,7 @@ else:
             st.cache_data.clear()
             st.rerun()
             
-        if not master_df.empty and not df.empty:
+        if not master_df.empty and not df.empty and '코드' in df.columns:
             total_items = len(master_df)
             submitted_codes = df[df['코드'] != '']['코드'].astype(str).tolist()
             master_df['제출여부'] = master_df['원자재코드'].astype(str).isin(submitted_codes)
@@ -596,7 +648,7 @@ else:
         st.markdown("### 🤖 대기열 검증 및 마스터 코드 확정 (인라인 수정 모드)")
         st.caption("좌측의 폼에서 오타를 직접 수정한 후 승인할 수 있으며, 우측의 라벨 이미지와 실시간으로 대조 가능합니다.")
         
-        if not df.empty:
+        if not df.empty and '검증상태' in df.columns:
             pending_df = df[df['검증상태'] == '대기중'].reset_index()
             
             if pending_df.empty:
@@ -617,14 +669,15 @@ else:
                         with col_left:
                             st.markdown("#### 📝 제출 데이터 (수정 가능)")
                             
-                            edit_maker = st.text_input("제조원", value=row.get('제조원'), key=f"e_maker_{excel_row_idx}")
-                            edit_name = st.text_input("제품명", value=row.get('제품명'), key=f"e_name_{excel_row_idx}")
-                            edit_type = st.text_input("식품유형", value=row.get('식품유형'), key=f"e_type_{excel_row_idx}")
-                            # 💡 관리자 화면에서는 원산지 입력칸을 그대로 유지하여 교차검증 시 사용 가능
-                            edit_origin = st.text_input("원산지", value=row.get('원산지'), key=f"e_origin_{excel_row_idx}")
-                            edit_old = st.text_input("기존 알레르기", value=row.get('기존알레르기'), key=f"e_old_{excel_row_idx}")
-                            edit_new = st.text_input("신규 알레르기", value=row.get('신규알레르기'), key=f"e_new_{excel_row_idx}")
-                            edit_ing = st.text_area("원재료명(한글표시사항)", value=row.get('원재료명(한글표시사항)'), height=150, key=f"e_ing_{excel_row_idx}")
+                            edit_vendor = st.text_input("납품업체(판매원)", value=row.get('판매원', ''), key=f"e_vendor_{excel_row_idx}")
+                            edit_maker = st.text_input("제조원", value=row.get('제조원', ''), key=f"e_maker_{excel_row_idx}")
+                            edit_name = st.text_input("제품명", value=row.get('제품명', ''), key=f"e_name_{excel_row_idx}")
+                            edit_type = st.text_input("식품유형", value=row.get('식품유형', ''), key=f"e_type_{excel_row_idx}")
+                            # 관리자 화면에서는 원산지 입력칸을 그대로 유지하여 교차검증 시 사용 가능
+                            edit_origin = st.text_input("원산지", value=row.get('원산지', ''), key=f"e_origin_{excel_row_idx}")
+                            edit_old = st.text_input("기존 알레르기", value=row.get('기존알레르기', ''), key=f"e_old_{excel_row_idx}")
+                            edit_new = st.text_input("신규 알레르기", value=row.get('신규알레르기', ''), key=f"e_new_{excel_row_idx}")
+                            edit_ing = st.text_area("원재료명(한글표시사항)", value=row.get('원재료명(한글표시사항)', ''), height=150, key=f"e_ing_{excel_row_idx}")
                             
                             if st.button(f"🔍 AI 교차검증 및 매칭 분석", key=f"btn_ai_{excel_row_idx}"):
                                 if file_id:
@@ -633,6 +686,7 @@ else:
                                         if f_bytes:
                                             updated_vendor_data = {
                                                 '제품명': edit_name,
+                                                '판매원': edit_vendor,
                                                 '원재료명(한글표시사항)': edit_ing,
                                                 '제조원': edit_maker,
                                                 '기존알레르기': edit_old,
@@ -679,6 +733,7 @@ else:
                                             '원재료명(한글표시사항)': edit_ing,
                                             '원산지': edit_origin,
                                             '제조원': edit_maker,
+                                            '판매원': edit_vendor,
                                             '기존알레르기': edit_old,
                                             '신규알레르기': edit_new,
                                             '검증상태': '승인완료',
@@ -705,8 +760,10 @@ else:
     # ------------------ [탭 3: 기존 DB 검색 및 다운로드] ------------------
     with admin_tab3:
         st.markdown("### 🔍 승인된 원자재 DB 다중 검색 및 다운로드")
-        if not df.empty:
+        if not df.empty and '검증상태' in df.columns:
             approved_df = df[df['검증상태'] == '승인완료'].copy()
+            if '판매원' not in approved_df.columns:
+                approved_df['판매원'] = ""
             
             search_query = st.text_input("🔍 제품명 또는 코드 검색 (쉼표로 구분하여 여러 개 동시 검색 가능, 예: 20014, 참깨):")
             
@@ -729,7 +786,7 @@ else:
                 
             approved_df['제품명(클릭 시 라벨오픈)'] = approved_df.apply(lambda row: make_link(row['제품명'], row['파일ID']), axis=1)
             
-            display_cols = ['코드', '제품명(클릭 시 라벨오픈)', '식품유형', '원산지', '원재료명(한글표시사항)', '제조원', '기존알레르기', '신규알레르기']
+            display_cols = ['코드', '제품명(클릭 시 라벨오픈)', '식품유형', '원산지', '원재료명(한글표시사항)', '판매원', '제조원', '기존알레르기', '신규알레르기']
             
             st.markdown(
                 """
@@ -768,10 +825,12 @@ else:
             
             if not approved_df.empty:
                 raw_df = df[df['검증상태'] == '승인완료'].copy()
+                if '판매원' not in raw_df.columns:
+                    raw_df['판매원'] = ""
                 if search_query:
                     raw_df = raw_df[raw_df['제품명'].astype(str).str.contains(pattern, regex=True, na=False) | raw_df['코드'].astype(str).str.contains(pattern, regex=True, na=False)]
                 
-                dl_cols = ['코드', '제품명', '식품유형', '원산지', '원재료명(한글표시사항)', '제조원', '기존알레르기', '신규알레르기']
+                dl_cols = ['코드', '제품명', '식품유형', '원산지', '원재료명(한글표시사항)', '판매원', '제조원', '기존알레르기', '신규알레르기']
                 csv = convert_df_to_csv(raw_df[dl_cols])
                 st.download_button(
                     label="📥 검색 결과 엑셀(CSV) 다운로드",
@@ -787,7 +846,7 @@ else:
         st.markdown("### 🚨 잠복 알레르기 및 완제품(BOM) 역추적")
         bom_df = load_bom_data()
         
-        if not df.empty:
+        if not df.empty and '코드' in df.columns:
             valid_df = df[df['코드'] != '']
             target_allergen = st.text_input("🔍 추적할 숨은 성분 키워드 (예: 참깨, 아몬드):")
             
@@ -857,7 +916,7 @@ else:
         
         bom_df = load_bom_data()
         
-        if df.empty or bom_df.empty:
+        if df.empty or bom_df.empty or '코드' not in df.columns:
             st.info("원자재 DB(승인 완료건) 또는 배합비 DB가 필요합니다.")
         else:
             with st.spinner("BOM 데이터와 원자재 DB를 스캔하여 완제품별 알레르기 테이블을 구성 중입니다..."):
