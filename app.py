@@ -311,11 +311,11 @@ def verify_with_ai(file_bytes, mime_type, vendor_data, master_data_json):
 
     [작업 1: 교차 검증]
     업체가 입력한 데이터와 첨부된 라벨 문서(이미지/PDF)를 정밀하게 비교하세요.
-    - 업체 데이터: 제품명({vendor_data['제품명']}), 납품업체/판매원({vendor_data.get('판매원', '')}), 제조원({vendor_data['제조원']}), 원재료명({vendor_data['원재료명(한글표시사항)']}), 기존알레르기({vendor_data['기존알레르기']}), 신규알레르기({vendor_data['신규알레르기']})
+    - 업체 데이터: 제품명({vendor_data['제품명']}), 공급사(판매원)({vendor_data.get('판매원', '')}), 제조원({vendor_data['제조원']}), 원재료명({vendor_data['원재료명(한글표시사항)']}), 기존알레르기({vendor_data['기존알레르기']}), 신규알레르기({vendor_data['신규알레르기']})
     - 라벨 원본에 숨어있는 알레르기 성분(특히 신규 알레르기: 참깨, 들깨, 아몬드, 캐슈넛) 누락 여부를 집중 점검하세요.
 
     [작업 2: 마스터 코드 매칭]
-    아래 제공된 '사내 전체 원자재 명단'을 바탕으로, 업체가 제출한 [제품명({vendor_data['제품명']})], [납품업체/판매원({vendor_data.get('판매원', '')})], [제조원({vendor_data['제조원']})]과 텍스트 유사도(띄어쓰기, 축약어, 공장명 포함)가 가장 높은 원자재 코드를 하나 찾아 추천하세요.
+    아래 제공된 '사내 전체 원자재 명단'을 바탕으로, 업체가 제출한 [제품명({vendor_data['제품명']})], [공급사(판매원)({vendor_data.get('판매원', '')})], [제조원({vendor_data['제조원']})]과 텍스트 유사도(띄어쓰기, 축약어, 공장명 포함)가 가장 높은 원자재 코드를 하나 찾아 추천하세요.
     - 사내 원자재 명단(JSON): {master_data_json}
 
     [출력 형식] (반드시 아래 양식을 지켜 순수 텍스트로만 출력하세요)
@@ -420,10 +420,10 @@ if not is_admin:
         st.session_state.vendor_items = [{} for _ in range(100)]
         st.session_state.item_count = 1
         
-    st.markdown("### 🏢 납품업체(판매원) 정보")
-    st.caption("💡 연세유업에 원료를 직접 납품하시는 업체명(판매원)을 사업자등록증 기준으로 기재해 주세요.")
+    st.markdown("### 🏢 공급사(판매원) 정보")
+    st.caption("💡 연세유업에 원료를 직접 공급하시는 공급사(판매원)명을 사업자등록증 기준으로 기재해 주세요.")
     v_vendor_global = st.text_input(
-        "납품하시는 업체명(판매원)을 적어주세요 (사업자등록증 기준 필수 기재)",
+        "공급사(판매원)명을 적어주세요 (사업자등록증 기준 필수 기재)",
         value=st.session_state.vendor_maker,
         key="maker_input",
         on_change=save_maker
@@ -460,11 +460,11 @@ if not is_admin:
             )
             save_item(i, 'type', v_type)
             
-        # 2열: 품목별 제조원 및 '판매원과 동일' 체크박스 + 우측 설명란
+        # 2열: 품목별 제조원 및 '공급사(판매원)와 동일' 체크박스 + 우측 설명란
         col_m1, col_m2 = st.columns([2, 2])
         with col_m1:
             same_as_vendor = st.checkbox(
-                "✅ 제조원과 판매원(납품업체)이 동일한 경우 체크해주세요",
+                "✅ 제조원과 공급사(판매원)가 동일한 경우 체크해주세요",
                 value=current_data.get('same_maker', False),
                 key=f"same_maker_{i}"
             )
@@ -473,7 +473,7 @@ if not is_admin:
             if same_as_vendor:
                 v_item_maker = v_vendor_global
                 st.text_input(
-                    "🏭 제조원 (판매원과 동일 자동적용)",
+                    "🏭 제조원 (공급사(판매원)와 동일 자동적용)",
                     value=v_vendor_global,
                     disabled=True,
                     key=f"maker_disabled_{i}"
@@ -492,7 +492,7 @@ if not is_admin:
                 """
                 <div style="background-color: #f8f9fa; padding: 12px 15px; border-radius: 6px; border-left: 4px solid #0056b3; margin-top: 10px; font-size: 13.5px; color: #333; line-height: 1.5;">
                 <strong>💡 제조원 작성 안내</strong><br>
-                • <strong>제조원과 판매원이 동일한 경우:</strong> 좌측 체크박스를 체크하시면 상단의 납품업체(판매원)명이 자동 입력됩니다.<br>
+                • <strong>제조원과 공급사(판매원)가 동일한 경우:</strong> 좌측 체크박스를 체크하시면 상단의 공급사(판매원)명이 자동 입력됩니다.<br>
                 • <strong>수입 원료 또는 타사 제조품을 납품하시는 경우:</strong> 체크하지 마시고 라벨에 표기된 <strong>실제 제조원명</strong>을 직접 기재해 주세요.
                 </div>
                 """,
@@ -554,7 +554,7 @@ if not is_admin:
         error_found = False
         
         if not v_vendor_global:
-            st.error("❌ 상단에 [납품업체명(판매원)]을 반드시 입력해 주세요.")
+            st.error("❌ 상단에 [공급사(판매원)]을 반드시 입력해 주세요.")
             error_found = True
         
         for idx, item in enumerate(items_data):
@@ -597,7 +597,7 @@ if not is_admin:
                 drive_link, file_id = upload_file_to_drive(file_bytes, file_name, file_mime_type)
                 
                 if drive_link and file_id:
-                    # A~M열은 기존 순서 그대로 유지하고, N열에 납품업체(판매원) 저장
+                    # A~M열은 기존 순서 그대로 유지하고, N열에 공급사(판매원) 저장
                     row_data = [
                         "", item['name'], item['type'], item['ingredients'], item['origin'], item['maker'], 
                         ", ".join(item['old_allergy']), ", ".join(item['new_allergy']), current_time, 
@@ -691,7 +691,7 @@ else:
                         with col_left:
                             st.markdown("#### 📝 제출 데이터 (수정 가능)")
                             
-                            edit_vendor = st.text_input("납품업체(판매원)", value=row.get('판매원', ''), key=f"e_vendor_{excel_row_idx}")
+                            edit_vendor = st.text_input("공급사(판매원)", value=row.get('판매원', ''), key=f"e_vendor_{excel_row_idx}")
                             edit_maker = st.text_input("제조원", value=row.get('제조원', ''), key=f"e_maker_{excel_row_idx}")
                             edit_name = st.text_input("제품명", value=row.get('제품명', ''), key=f"e_name_{excel_row_idx}")
                             edit_type = st.text_input("식품유형", value=row.get('식품유형', ''), key=f"e_type_{excel_row_idx}")
