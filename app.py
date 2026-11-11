@@ -399,7 +399,7 @@ if not is_admin:
         st.session_state.item_count = 1
         
     st.markdown("### 🏢 납품업체(판매원) 정보")
-    st.caption("💡 연세유업에 원료를 직접 납품하시는 업체명(판매원·유통사·수입사 또는 직접 제조·납품업체)을 사업자등록증 기준으로 기재해 주세요.")
+    st.caption("💡 연세유업에 원료를 직접 납품하시는 업체명(판매원)을 사업자등록증 기준으로 기재해 주세요.")
     v_vendor_global = st.text_input(
         "납품하시는 업체명(판매원)을 적어주세요 (사업자등록증 기준 필수 기재)",
         value=st.session_state.vendor_maker,
